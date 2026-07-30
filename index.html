@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>大野雅章 | 評価する側から、作る側へ</title>
+<style>
+  :root {
+    --green: #2f5540;
+    --green-dark: #1c3626;
+    --red: #96332f;
+    --red-dark: #6f2521;
+    --ink: #3a3d3a;
+    --gray: #63665f;
+    --line: #e2ddd3;
+    --paper: #ffffff;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+    line-height: 1.85;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  section {
+    padding: 110px 24px;
+    max-width: 880px;
+    margin: 0 auto;
+  }
+
+  .eyebrow {
+    display: block;
+    text-align: center;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: var(--green-dark);
+    margin-bottom: 14px;
+  }
+
+  h2 {
+    font-size: 1.9rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-align: center;
+    color: var(--green-dark);
+    margin-bottom: 56px;
+  }
+
+  .fade-in {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.7s ease, transform 0.7s ease;
+  }
+
+  .fade-in.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ---------- Hero ---------- */
+  .hero {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--ink);
+    background: var(--paper);
+    padding: 60px 24px 40px;
+    position: relative;
+  }
+
+  .hero-flag-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 4px;
+    display: flex;
+  }
+  .hero-flag-bar span { flex: 1; }
+  .hero-flag-bar span:nth-child(1) { background: var(--green); }
+  .hero-flag-bar span:nth-child(2) { background: var(--paper); }
+  .hero-flag-bar span:nth-child(3) { background: var(--red); }
+
+  .avatar {
+    width: 148px;
+    height: 148px;
+    object-fit: cover;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    padding: 6px;
+    margin-bottom: 32px;
+  }
+
+  .hero h1 {
+    font-size: 2.4rem;
+    font-weight: 700;
+    letter-spacing: 6px;
+    color: var(--green-dark);
+  }
+
+  .hero .location {
+    margin-top: 14px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--gray);
+  }
+
+  .hero .location .pin {
+    color: var(--red);
+    margin-right: 4px;
+  }
+
+  .hero .next-move-badge {
+    margin-top: 26px;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--green);
+    padding: 8px 0;
+    border-top: 1px solid var(--green);
+    border-bottom: 1px solid var(--green);
+  }
+
+  .hero .catch {
+    margin-top: 28px;
+    font-size: 1.55rem;
+    font-weight: 700;
+    color: var(--ink);
+    max-width: 640px;
+    line-height: 1.7;
+    letter-spacing: 0.5px;
+  }
+
+  .hero .catch .accent {
+    color: var(--red);
+  }
+
+  .hero .role {
+    margin-top: 24px;
+    font-size: 0.85rem;
+    color: var(--gray);
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+  }
+
+  .hero .role .arrow {
+    color: var(--red);
+    font-weight: 700;
+    margin: 0 10px;
+  }
+
+  .scroll-hint {
+    position: absolute;
+    bottom: 36px;
+    font-size: 0.7rem;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: #b5b0a4;
+  }
+
+  /* ---------- Next Stage / Vibe Coding ---------- */
+  .vibe-section {
+    background: var(--paper);
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .vibe-card {
+    font-size: 1.02rem;
+  }
+
+  .vibe-card p + p { margin-top: 18px; }
+
+  .vibe-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 32px;
+  }
+
+  /* ---------- About ---------- */
+  .about-card {
+    font-size: 1.02rem;
+  }
+
+  .about-card p + p { margin-top: 18px; }
+
+  /* ---------- Shared: outline tag ---------- */
+  .tag {
+    padding: 7px 16px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    border: 1px solid var(--green);
+    color: var(--green);
+    background: transparent;
+  }
+
+  .tag:nth-child(even) { border-color: var(--red); color: var(--red); }
+
+  /* ---------- Timeline ---------- */
+  .timeline {
+    position: relative;
+    padding-left: 32px;
+    border-left: 1px solid var(--line);
+  }
+
+  .timeline-item {
+    position: relative;
+    padding: 0 0 44px 0;
+  }
+
+  .timeline-item:last-child { padding-bottom: 0; }
+
+  .timeline-item::before {
+    content: "";
+    position: absolute;
+    left: -37px;
+    top: 4px;
+    width: 9px;
+    height: 9px;
+    background: var(--green);
+  }
+
+  .timeline-item:nth-child(even)::before { background: var(--red); }
+
+  .timeline-date {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: var(--gray);
+    margin-bottom: 8px;
+  }
+
+  .timeline-item h3 {
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-bottom: 4px;
+    color: var(--green-dark);
+  }
+
+  .timeline-item .org {
+    font-size: 0.85rem;
+    color: var(--gray);
+    margin-bottom: 12px;
+    font-style: italic;
+  }
+
+  .timeline-item ul {
+    padding-left: 18px;
+    font-size: 0.95rem;
+  }
+
+  .timeline-item li { margin-bottom: 4px; }
+
+  /* ---------- Skills ---------- */
+  .skill-group {
+    margin-bottom: 36px;
+  }
+
+  .skill-group:last-child { margin-bottom: 0; }
+
+  .skill-group h3 {
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 18px;
+    color: var(--green-dark);
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  /* ---------- Interests ---------- */
+  .interest-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+  }
+
+  .interest-card {
+    background: var(--paper);
+    padding: 40px 32px;
+    text-align: left;
+  }
+
+  .interest-card .icon {
+    font-size: 1.6rem;
+    margin-bottom: 16px;
+    display: block;
+  }
+
+  .interest-card h3 {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 12px;
+    color: var(--green-dark);
+  }
+
+  .interest-card:nth-child(1) h3 { border-left: 3px solid var(--green); padding-left: 10px; }
+  .interest-card:nth-child(2) h3 { border-left: 3px solid var(--red); padding-left: 10px; }
+
+  .interest-card p {
+    font-size: 0.92rem;
+    color: var(--gray);
+  }
+
+  /* ---------- Education / Languages ---------- */
+  .edu-lang-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+  }
+
+  .edu-card, .lang-card {
+    background: var(--paper);
+    padding: 36px 32px;
+  }
+
+  .edu-card h3, .lang-card h3 {
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+    color: var(--green-dark);
+  }
+
+  .lang-bar-wrap {
+    margin-bottom: 16px;
+  }
+
+  .lang-bar-wrap:last-child { margin-bottom: 0; }
+
+  .lang-bar-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.85rem;
+    margin-bottom: 8px;
+    color: var(--ink);
+  }
+
+  .lang-bar-bg {
+    background: var(--line);
+    height: 3px;
+  }
+
+  .lang-bar-fill {
+    height: 100%;
+    background: var(--green);
+  }
+
+  .lang-bar-wrap:nth-child(even) .lang-bar-fill { background: var(--red); }
+
+  /* ---------- Footer ---------- */
+  footer {
+    text-align: center;
+    padding: 90px 24px 70px;
+    background: var(--paper);
+    color: var(--ink);
+    border-top: 1px solid var(--line);
+    position: relative;
+  }
+
+  footer::before {
+    content: "";
+    position: absolute;
+    top: -1px;
+    left: 0;
+    width: 100%;
+    height: 4px;
+    background: linear-gradient(90deg, var(--green) 0 50%, var(--red) 50% 100%);
+  }
+
+  footer p {
+    color: var(--gray);
+    font-size: 0.95rem;
+  }
+
+  .fb-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 28px;
+    padding: 14px 36px;
+    background: var(--ink);
+    color: white;
+    font-weight: 600;
+    font-size: 0.85rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    text-decoration: none;
+    transition: background 0.2s ease;
+  }
+
+  .fb-button:hover {
+    background: var(--green);
+  }
+
+  footer .footnote {
+    margin-top: 40px;
+    font-size: 0.75rem;
+    letter-spacing: 1px;
+    color: #b5b0a4;
+  }
+
+  @media (max-width: 640px) {
+    .hero h1 { font-size: 2rem; letter-spacing: 4px; }
+    .hero .catch { font-size: 1.2rem; }
+    .interest-grid { grid-template-columns: 1fr; }
+    .edu-lang-grid { grid-template-columns: 1fr; }
+    section { padding: 80px 20px; }
+  }
+</style>
+</head>
+<body>
+
+<section class="hero">
+  <div class="hero-flag-bar"><span></span><span></span><span></span></div>
+  <img class="avatar" src="profile2.png" alt="大野雅章">
+  <h1>大野雅章</h1>
+  <div class="location"><span class="pin">📍</span>Kuala Lumpur, Malaysia 在住</div>
+  <div class="next-move-badge">Next Move — Vibe Coding</div>
+  <div class="catch">評価する側から、<span class="accent">作る側</span>へ。<br>Vibe Codingで次の一歩を。</div>
+  <div class="role">AI-Generated Video Evaluator <span class="arrow">→</span> Vibe Coder</div>
+  <div class="scroll-hint">Scroll</div>
+</section>
+
+<section id="vibe" class="vibe-section">
+  <span class="eyebrow">Next Stage</span>
+  <h2>Vibe Coding</h2>
+  <div class="vibe-card fade-in">
+    <p>
+      AI生成コンテンツを日々「見抜く側」として評価を重ねてきた経験を土台に、これからはAIと共に
+      「作る側」へとキャリアをシフトしていきます。Claude Codeをはじめとするエージェント型AIを
+      毎日使い込む中で、評価者としての厳密な目と、Vibeコーディングによる高速なプロトタイピング力を
+      掛け合わせることに大きな可能性を感じています。
+    </p>
+    <p>
+      AI評価の現場で培った「ブレない基準」「逃げない判断」を、これからはコードを書き、プロダクトを
+      形にする力として活かしていきたいと考えています。
+    </p>
+    <div class="vibe-tags">
+      <span class="tag">Vibe Coding</span>
+      <span class="tag">Claude Code</span>
+      <span class="tag">Agentic AI開発</span>
+      <span class="tag">プロトタイピング</span>
+      <span class="tag">AI×プロダクト制作</span>
+    </div>
+  </div>
+</section>
+
+<section id="about">
+  <span class="eyebrow">Profile</span>
+  <h2>About Me</h2>
+  <div class="about-card fade-in">
+    <p>
+      マレーシア・クアラルンプール在住。現地に拠点を置きながら、大手グローバル動画プラットフォームにて
+      Googleの厳格なポリシーガイドラインに基づきAI生成動画の評価を行っています。1日76件・精度95%を
+      維持しながら、日本語コンテンツのニュアンスを丁寧に見極める仕事に、日々誠実に向き合っています。
+    </p>
+    <p>
+      東芝でのテクニカルサポート、Meta広告のカスタマーサポート、そして日本・中国・マレーシアでの
+      Webディレクション/プロジェクトマネジメント経験を土台に、AI Evaluatorという役割へキャリアを
+      シフトさせてきました。マレーシア移住後も現地企業で実務経験を積み重ね、多拠点での就業経験を
+      活かした異文化コミュニケーション力を強みにしています。Claude Opus・Claude Codeを毎日活用する
+      ユーザーとして、AI駆動の未来への強い関心と、AIの安全性に対する妥協のない意識を持っています。
+    </p>
+    <p>
+      ブレない基準で、逃げずに判断する。それが、私がAI評価の仕事で大切にしてきた姿勢であり、
+      これから「作る側」として歩む上でも土台になると考えています。
+    </p>
+  </div>
+</section>
+
+<section id="career">
+  <span class="eyebrow">Experience</span>
+  <h2>職歴</h2>
+  <div class="timeline">
+
+    <div class="timeline-item fade-in">
+      <span class="timeline-date">2024.01 — 現在</span>
+      <h3>AI-Generated Video Evaluator / Content Moderator</h3>
+      <div class="org">Concentrix CX Malaysia Sdn Bhd・クアラルンプール</div>
+      <ul>
+        <li>1日76件の評価を精度95%で実施。AI生成動画の収益化適格性を、品質・安全性・ポリシー基準に沿って判定</li>
+        <li>日本語コンテンツの高度なニュアンスを精査し、SxS評価・ハルシネーション検知にも通じる分析力を発揮</li>
+      </ul>
+    </div>
+
+    <div class="timeline-item fade-in">
+      <span class="timeline-date">2021.08 — 2024.01</span>
+      <h3>Customer Service Advisor for Meta Ads</h3>
+      <div class="org">TelePerformance Malaysia・ペナン</div>
+      <ul>
+        <li>Instagram/Facebook広告の設定・配信・ポリシー準拠について、中小企業から大企業まで技術サポート</li>
+        <li>広告ポリシーを運用アドバイスへ翻訳し、日本語での複雑な技術説明力を培う</li>
+      </ul>
+    </div>
+
+    <div class="timeline-item fade-in">
+      <span class="timeline-date">2022.06 — 2023.02</span>
+      <h3>In-house Web Marketing（リモート・兼務）</h3>
+      <div class="org">Value Agent Inc.・東京</div>
+      <ul>
+        <li>Facebook/Xアカウント運用、WordPressブログ・メルマガ執筆、動画編集者マネジメントを担当</li>
+      </ul>
+    </div>
+
+    <div class="timeline-item fade-in">
+      <span class="timeline-date">2019.04 — 2020.02</span>
+      <h3>Project Manager — EY Japan Global Site Renewal</h3>
+      <div class="org">WEB STAFF Co., Ltd.（EY Japan常駐）・東京</div>
+      <ul>
+        <li>約3,000ページ・12名体制のプロジェクトを統括し、納期遵守率110%・品質評価100%を達成</li>
+        <li>Googleスプレッドシートによる進捗ダッシュボードを導入し、クライアントとの信頼関係を構築</li>
+      </ul>
+    </div>
+
+    <div class="timeline-item fade-in">
+      <span class="timeline-date">2016.09 — 2018.12</span>
+      <h3>Web Chief Director（Sales兼務）</h3>
+      <div class="org">Huiling Shanghai Co., Ltd.（HL Company）・上海</div>
+      <ul>
+        <li>年間90社・40案件を、5名チームで対応。要件定義から提案・制作進行・品質管理までを一貫担当</li>
+        <li>「中国 ホームページ制作」で検索1位を獲得するなど、SEO戦略も主導</li>
+      </ul>
+    </div>
+
+    <div class="timeline-item fade-in">
+      <span class="timeline-date">2011.02 — 2014.04</span>
+      <h3>Technical Support Supervisor</h3>
+      <div class="org">Toshiba Information Equipment・沖縄</div>
+      <ul>
+        <li>オペレーター11名を統括し、コーチングによるKPI改善率75%、Tier-2エスカレーション40%削減を実現</li>
+      </ul>
+    </div>
+
+  </div>
+</section>
+
+<section id="skills">
+  <span class="eyebrow">Expertise</span>
+  <h2>スキル & AI専門性</h2>
+
+  <div class="skill-group fade-in">
+    <h3>Core Competencies</h3>
+    <div class="tags">
+      <span class="tag">テクニカルサポート＆SV</span>
+      <span class="tag">プロジェクトマネジメント</span>
+      <span class="tag">異文化チームリーダーシップ (JP/CN/MY)</span>
+      <span class="tag">AIコンテンツ評価・ポリシーQA</span>
+      <span class="tag">セールスマネジメント</span>
+      <span class="tag">Webディレクション</span>
+    </div>
+  </div>
+
+  <div class="skill-group fade-in">
+    <h3>AI Expertise</h3>
+    <div class="tags">
+      <span class="tag">Claude Opus 日常利用</span>
+      <span class="tag">Claude Code / Cursor</span>
+      <span class="tag">MCP (Model Context Protocol)</span>
+      <span class="tag">SxS評価</span>
+      <span class="tag">ハルシネーション検知</span>
+      <span class="tag">プロンプトエンジニアリング</span>
+      <span class="tag">AI学習データ品質</span>
+    </div>
+  </div>
+</section>
+
+<section id="interests">
+  <span class="eyebrow">Personal</span>
+  <h2>趣味・興味関心</h2>
+  <div class="interest-grid">
+    <div class="interest-card fade-in">
+      <span class="icon">🤖</span>
+      <h3>生成AI・LLMとの対話と検証</h3>
+      <p>
+        Claude・ChatGPT・Geminiなど複数のLLMを日常的に使い比べ、マルチターンでのプロンプト設計や
+        出力比較・検証を行うこと自体が趣味に。コンテンツモデレーターやAI Video Evaluatorとしての
+        実務経験が、日々のAI検証にも活きています。
+      </p>
+    </div>
+    <div class="interest-card fade-in">
+      <span class="icon">🌏</span>
+      <h3>多文化交流</h3>
+      <p>
+        日本・中国・マレーシアでの居住・就業経験を通じ、異なる文化背景を持つチームと働く面白さに
+        魅了されてきました。異文化間の橋渡し役として、丁寧なコミュニケーションを大切にしています。
+      </p>
+    </div>
+  </div>
+</section>
+
+<section id="education">
+  <span class="eyebrow">Background</span>
+  <h2>学歴・言語</h2>
+  <div class="edu-lang-grid">
+    <div class="edu-card fade-in">
+      <h3>学歴</h3>
+      <p><strong>Toho University</strong>（日本）<br>理学部 生物学科 卒業</p>
+      <p style="margin-top:14px;"><strong>Internet Academy</strong>（日本）<br>Web Design & Direction コース 修了</p>
+    </div>
+    <div class="lang-card fade-in">
+      <h3>言語</h3>
+      <div class="lang-bar-wrap">
+        <div class="lang-bar-label"><span>日本語</span><span>ネイティブ</span></div>
+        <div class="lang-bar-bg"><div class="lang-bar-fill" style="width:100%"></div></div>
+      </div>
+      <div class="lang-bar-wrap">
+        <div class="lang-bar-label"><span>英語</span><span>日常会話</span></div>
+        <div class="lang-bar-bg"><div class="lang-bar-fill" style="width:65%"></div></div>
+      </div>
+      <div class="lang-bar-wrap">
+        <div class="lang-bar-label"><span>中国語</span><span>中級（HSK3）</span></div>
+        <div class="lang-bar-bg"><div class="lang-bar-fill" style="width:45%"></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <span class="eyebrow">Get in Touch</span>
+  <h2>Contact</h2>
+  <p>お気軽にご連絡ください。</p>
+  <a class="fb-button" href="https://www.facebook.com/Macky55555" target="_blank" rel="noopener noreferrer">
+    Facebookでつながる
+  </a>
+  <div class="footnote">© 2026 大野雅章</div>
+</footer>
+
+<script>
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+      }
+    });
+  }, { threshold: 0.15 });
+
+  document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+</script>
+
+</body>
+</html>
