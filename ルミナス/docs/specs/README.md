@@ -8,9 +8,9 @@
 
 実行中と実行後の約束:
 - **実行中はこのフォルダのファイルを編集しない**（Edit・Write は `codex-lock-guard` hook が止める。Bash での書き込みも避ける）。実行中の編集は Codex の差分と混ざり、違反（3）になる。HANDOVER・digest も終了後に書く
-- 実行中に書かれてよいのは、git の管理外の追記だけの記録（`data/usage.jsonl`・`data/decisions_shadow.jsonl`・`logs/*.log`・`state/.session-end.log`）と印のファイル（`*.lock`・`state/.sessions/*`・`data/.*_disabled`）だけ。既存部分の書き換え・削除・実行権限は違反。JSON 行の記録に追記された行は JSON オブジェクトで、費用台帳の数値（usd・calls・トークン・ms）は 0 以上の有限の数であること。追跡中の `state/escalations.log` は実行中に書かない（モデル切替の記録は `state/.sessions/escalations.pending` に保留し、終了後に移す）
+- 実行中に書かれてよいのは、git の管理外の追記だけの記録（`data/usage.jsonl`・`data/decisions_shadow.jsonl`・`logs/*.log`・`state/.session-end.log`）と印のファイル（`*.lock`・`state/.sessions/*`・`data/.*_disabled`）だけ。既存部分の書き換え・削除・実行権限は違反。新しい印は空のファイルだけ（開始印 `*.start` は数字、停止スイッチは中身を問わない）。既存の印の中身の変更は違反（開始印だけは、より新しい時刻への更新を許す）。JSON 行の記録に追記された行は JSON オブジェクトで、費用台帳の数値（usd・calls・トークン・ms）は 0 以上の有限の数であること。追跡中の `state/escalations.log` は実行中に書かない（モデル切替の記録は Codex が書けない置き場の `escalations.pending` に保留し、終了後に機械的な書式の行だけを移す）
 - Codex は独自のプロセスグループで起動し、終了後にグループごと止める。待ち時間（`LUMINOUS_SETTLE_S`、既定 2 秒）を置いてから検査し、片付けの後にもう一度待って比べ直す。検査の後にも書き込みがあれば違反（グループから抜け出したプロセスの可能性）
-- `.git` は大文字小文字を区別せずに探す（Mac の既定のファイルシステムでは `.GIT` も git が `.git` として読む）
+- `.git` は大文字小文字と HFS+ で無視される文字（ゼロ幅文字など）を問わずに探す（Mac では `.GIT` なども git が `.git` として読む）。hooks の事前点検は `find -iname` で、大文字小文字だけに対応
 - 3 のときは `data/.codex_violation` ができ、司令塔が記録（`data/codex_runs/<日時>-<名前>/`）と差分を確認して片付けるまで、次の実行を断る。片付けたらこのファイルを削除する
 - 入れ子の `.git` が見つかったら、git を1回も実行する前に作業フォルダの外（安全な置き場の `quarantine/`）へ移す。中身は git コマンドで開かず、ファイルとして読む
 - 実行の前後で `__pycache__`・`.pytest_cache` を種類を問わず消す（仕込まれた `.pyc` を読み込まないため）。リンクやファイルになっていれば違反

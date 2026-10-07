@@ -36,7 +36,7 @@
 - 実装: 指示書（`docs/specs/`、型は `docs/specs/README.md`）→ `tools/codex_impl.sh`（`-s workspace-write`、memories と multi_agent を無効化）→ `tools/scope_check.py` が ALLOWED 外の変更と非公開の印（`/Users/`・`_非公開`）を検出 → `git diff` → テスト → 審査（Agent・model: opus・`docs/review.md`、1行目 APPROVE）→ 司令塔が該当ファイルだけコミット
 - 終了コード: 0=成功 / 2=前提の誤り（停止中・実行中・前回の違反が未処理・指示書不備・作業ツリーが汚い・作業フォルダ内に .git・本体なし）/ 3=違反（ALLOWED 外・非公開の印・`.env` の内容か権限・HEAD・本物の .git の設定や hooks・入れ子の .git・リンクや FIFO）/ 4=利用枠の上限 / 5=Codex の失敗 / 130=中断
 - Codex は独自のプロセスグループで起動し、終了後にグループごと止める。待ってから検査し、片付けの後にもう一度比べ直す（`LUMINOUS_SETTLE_S`、既定 2 秒）
-- Codex の実行後は、入れ子の `.git`（大文字小文字を区別しない）を作業フォルダの外へ隔離し、本物の `.git` の config・hooks・info/attributes が変わっていないことを確かめるまで git を1回も実行しない（`.git` の設定に仕込まれた fsmonitor 等のコマンドが、サンドボックスの外で走るのを防ぐ）。その後の git は本物の GITDIR を明示し、fsmonitor と hooks を止めて使う。SessionStart と commit 前の hook も、git を使う前に入れ子の `.git` を探す
+- Codex の実行後は、入れ子の `.git`（大文字小文字と HFS+ で無視される文字を問わない）を作業フォルダの外へ隔離し、本物の `.git` の config・hooks・info/attributes が変わっていないことを確かめるまで git を1回も実行しない（`.git` の設定に仕込まれた fsmonitor 等のコマンドが、サンドボックスの外で走るのを防ぐ）。その後の git は本物の GITDIR を明示し、fsmonitor と hooks を止めて使う。SessionStart と commit 前の hook も、git を使う前に入れ子の `.git` を探す
 - 実行中はこのフォルダを編集しない（`codex-lock-guard` hook が Edit・Write を止める。SessionEnd は docx の再生成を見送る）。違反のあとは `data/.codex_violation` を消すまで次の実行を断り、SessionStart は `orch.health` を実行しない（`orch/` に未審査の変更があるときも同じ）。詳しくは `docs/specs/README.md`
 - 失敗かつ作業ツリーが無変更のときだけ、`CODEX_FALLBACK_MODEL`（既定 gpt-5.6-sol）で1回やり直す
 - 利用枠の上限（「try again at …」）: 指示書を残して待つ。途中の差分があれば再実行せず、司令塔がテストまで仕上げて審査に回す。原本の障害修正を優先する
@@ -115,7 +115,7 @@
 ## 10. 未確認・要確認・残るリスク
 
 - 残るリスク（2026-10-08 のコード審査で「軽」と判定、未対応）: 上限の判定・呼び出し・記録は原子的でないため、並行する N 本の呼び出しは最大 N−1 回分だけ上限を超えうる。1 回の金額が小さく並行利用も少ないので、当面は台帳の日次確認で補う。並行が増えたら「見込み額を予約してから呼ぶ」方式にする
-- 残るリスク（2026-10-08 の 3 回目のコード審査の対応後）: Codex は独自のプロセスグループで動かし、終了後にグループごと止め、待ってから検査し、片付けの後に待って比べ直す。それでも、グループから抜け出し（setsid 等）、待ち時間より後に書き込むプロセスは検出できない。その書き込みが git の管理外（`.venv/` 等）に入ると、後の実行で読み込まれうる。Mac での試験で Codex の workspace-write サンドボックスが setsid とプロセスの存続を許すかを確かめ、許すなら OS のサンドボックス側（または実行の後に `.venv` を作り直す運用）で補う。ロックの回収は「持ち主が死んでいる」ときだけで、3 本が同時に回収しようとする極端な競合は扱わない
+- 残るリスク（2026-10-08 の 3 回目のコード審査の対応後）: Codex は独自のプロセスグループで動かし、終了後にグループごと止め、待ってから検査し、片付けの後に待って比べ直す。それでも、グループから抜け出し（setsid 等）、待ち時間より後に書き込むプロセスは検出できない。その書き込みが git の管理外（`.venv/` 等）に入ると、後の実行で読み込まれうる。Mac での試験で Codex の workspace-write サンドボックスが setsid とプロセスの存続を許すかを確かめ、許すなら OS のサンドボックス側（または実行の後に `.venv` を作り直す運用）で補う。ロックの回収は「持ち主が死んでいる」ときだけで、3 本が同時に回収しようとする極端な競合は扱わない。hooks の入れ子の .git の事前点検（`find -iname`）は大文字小文字だけに対応し、HFS+ の外付けボリュームで無視される文字を挟んだ名前は、ラッパーの検査器だけが検出する
 - Codex 実装役の封じ込め: 検査器・指示書の写し・実行前の記録は Codex が書けない置き場（`~/.cache/luminous-codex/`、`LUMINOUS_SAFE_DIR` で変更可）に置き、作業領域の外の python3 を `-I -S` で使う。Codex の workspace-write サンドボックスが書ける範囲（作業フォルダ・/tmp・$TMPDIR）は二次情報によるもので、Mac で確認する
 
 - 原本の `codex_impl.sh`・`decisions.py`・`gemini_writer.py` との差（Mac で見比べる）

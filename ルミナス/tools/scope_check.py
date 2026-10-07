@@ -46,14 +46,21 @@ JST = timezone(timedelta(hours=9))
 # git で追跡される（公開される）ファイルは入れない。追記部分は ALLOWED の判定も非公開の印の検査も通らないため（tests が .gitignore を確かめる）
 APPEND_ONLY = {"data/usage.jsonl", "data/decisions_shadow.jsonl", "state/.session-end.log"}
 APPEND_GLOBS = ("logs/*.log",)
-# 中身を問わない印のファイル（ロック・セッションの開始印・停止スイッチ）。通常のファイルで実行権限が無ければ許す。削除は違反
+# 印のファイル（ロック・セッションの開始印と編集印・停止スイッチ）。新規作成は「空」（開始印は数字、停止スイッチは中身を問わない）だけ許す。
+# 既存の印の中身の変更は違反（開始印だけは、より新しい時刻への更新を許す。再開・圧縮で書き直されるため）。削除・実行権限も違反
 MARKER_GLOBS = ("data/*.lock", "logs/*.lock", "state/.sessions/*", "data/.*_disabled")
 # 費用台帳の数値の欄（追記された行で、数値でない・負・無限大・NaN なら違反。上限の計算を壊させない）
 LEDGER_NUMS = ("usd", "calls", "in_tokens", "out_tokens", "ms")
 
 
+# HFS+ が名前の比較で無視する文字（git の is_hfs_dotgit と同じ。ゼロ幅文字・方向制御文字・BOM）
+HFS_IGNORABLE = dict.fromkeys([0x200C, 0x200D, 0x200E, 0x200F, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E,
+                               0x206A, 0x206B, 0x206C, 0x206D, 0x206E, 0x206F, 0xFEFF])
+
+
 def is_git_name(name: str) -> bool:
-    return name.casefold() == ".git"
+    """git が .git として読みうる名前か（大文字小文字・HFS+ で無視される文字を問わない）。"""
+    return name.translate(HFS_IGNORABLE).casefold() == ".git"
 
 
 def _open_regular(path: str):
@@ -291,7 +298,31 @@ def is_system(path: str) -> bool:
     return path in APPEND_ONLY or _match(path, APPEND_GLOBS) or _match(path, MARKER_GLOBS)
 
 
-def system_change_problem(root: str, p: str, b: Optional[dict], a: Optional[dict]) -> str:
+def _marker_problem(root: str, p: str, b: Optional[dict], a: dict, old_text: Optional[str]) -> str:
+    fh = _open_regular(os.path.join(root, p))
+    if fh is None:
+        return f"印のファイルを読めない: {p}"
+    with fh:
+        new = fh.read(4097)
+    is_new = b is None or b.get("t") != "file"
+    if p.endswith(".start"):
+        if not re.fullmatch(rb"\s*[0-9]{1,12}\s*", new):
+            return f"開始時刻の印が数字でない: {p}"
+        if not is_new and old_text is not None and re.fullmatch(r"\s*[0-9]{1,12}\s*", old_text) and int(new) < int(old_text):
+            return f"開始時刻の印が過去に戻された: {p}"
+        return ""
+    if is_new:
+        if os.path.basename(p).endswith("_disabled"):
+            return ""  # 停止スイッチ（止める方向にしか働かない）。中身は理由のメモでよい
+        if new.strip():
+            return f"新しい印のファイルに中身がある: {p}"
+        return ""
+    if a.get("h") != b.get("h"):
+        return f"既存の印のファイルの中身が変わった: {p}"
+    return ""
+
+
+def system_change_problem(root: str, p: str, b: Optional[dict], a: Optional[dict], old_text: Optional[str] = None) -> str:
     """司令塔・orch・hooks の記録ファイルの変更が許せる形かを調べる。問題があれば理由、無ければ空文字。"""
     if a is None:
         return f"記録ファイルの削除: {p}"
@@ -299,6 +330,8 @@ def system_change_problem(root: str, p: str, b: Optional[dict], a: Optional[dict
         return f"記録ファイルが通常のファイルでない: {p}"
     if a.get("m", 0) & 0o111:
         return f"記録ファイルに実行権限: {p}"
+    if _match(p, MARKER_GLOBS) and not (p in APPEND_ONLY or _match(p, APPEND_GLOBS)):
+        return _marker_problem(root, p, b, a, old_text)
     if (p in APPEND_ONLY or _match(p, APPEND_GLOBS)) and b and b.get("t") == "file":
         n = int(b.get("n", 0))
         if a.get("n", 0) < n:
@@ -395,7 +428,7 @@ def compare(root: str, before: dict, allowed: List[str], real_gitdir: str = "") 
             problems.append(f"通常のファイルでないもの（FIFO 等）: {p}")
             continue
         if is_system(p):
-            why = system_change_problem(root, p, b_ent, ent)
+            why = system_change_problem(root, p, b_ent, ent, before["contents"].get(p))
             if why:
                 problems.append(why)
             continue
@@ -437,7 +470,7 @@ def recheck(root: str, after: dict, real_gitdir: str = "") -> List[str]:
         if ent is None and (b_ent or {}).get("t") == "badartifact":
             continue
         if is_system(p) and (ent or {}).get("t") != "git":
-            why = system_change_problem(root, p, b_ent, ent)
+            why = system_change_problem(root, p, b_ent, ent, after["contents"].get(p))
             if why:
                 problems.append(why)
             continue

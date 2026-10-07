@@ -14,7 +14,10 @@ INPUT="$(cat)"
 SID="$(hook_session_id "$INPUT")"
 MARK="$ROOT/state/.sessions/$SID.start"
 [ -f "$MARK" ] || exit 0
-START="$(cat "$MARK" 2>/dev/null || echo 0)"
+START="$(cat "$MARK" 2>/dev/null)"
+# 開始時刻は数字で、未来でないこと。そうでなければ印のファイル自体の更新時刻を使う（書き換えでゲートを外させない）
+case "$START" in ''|*[!0-9]*) START="$(hook_mtime "$MARK")" ;; esac
+[ "$START" -gt "$(date +%s)" ] 2>/dev/null && START="$(hook_mtime "$MARK")"
 TODAY="$(TZ="${LUMINOUS_TZ:-Asia/Tokyo}" date +%Y-%m-%d)"
 DIGEST="$ROOT/digest/$TODAY.md"
 

@@ -4,6 +4,7 @@ set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 T="${TMPDIR:-/tmp}/luminous-test-$$"; mkdir -p "$T"; trap 'rm -rf "$T"' EXIT
 pass=0; fail=0
+export LUMINOUS_SAFE_DIR="$T/cache"   # Codex が書けない置き場（保留中の記録など）をテスト用に差し替える
 # 偽の鍵は実行時に組み立てる（ファイル本文に鍵の形を置かない。置くと自分の pre-commit に止められる）
 FAKE_KEY="sk""-FAKEFAKEFAKEFAKEFAKEFAKE1234567"
 ok() { pass=$((pass+1)); echo "PASS $1"; }
@@ -122,7 +123,7 @@ printf '日時: test\n' > "$R/data/.codex_violation"
 printf '%s' "$SID" | bash "$R/.claude/hooks/restore-charter.sh" | grep -q 'git の点検を省きました' && ok "restore: 違反の印の間は git を使わない" || ng "restore: 違反の印で git 省略"
 expect "guard-secrets: 違反の印の間は commit を止める" 2 bash -c "printf '%s' '{\"tool_input\":{\"command\":\"git commit -m x\"}}' | bash '$R/.claude/hooks/guard-secrets.sh'"
 rm -f "$R/data/.codex_violation"
-ESC="$R/state/escalations.log"; PEND="$R/state/.sessions/escalations.pending"
+ESC="$R/state/escalations.log"; PEND="$LUMINOUS_SAFE_DIR/escalations.pending"
 N0="$(cat "$ESC" 2>/dev/null | wc -l | tr -d ' ')"
 mkdir -p "$R/data/codex_runs/.lock"; echo "$$ 0" > "$R/data/codex_runs/.lock/owner"
 printf '%s' '{"from_model":"a","to_model":"b"}' | bash "$R/.claude/hooks/log-model-switch.sh" >/dev/null 2>&1
@@ -130,6 +131,22 @@ printf '%s' '{"from_model":"a","to_model":"b"}' | bash "$R/.claude/hooks/log-mod
 rm -rf "$R/data/codex_runs/.lock"
 printf '%s' '{"from_model":"b","to_model":"c"}' | bash "$R/.claude/hooks/log-model-switch.sh" >/dev/null 2>&1
 [ "$(cat "$ESC" | wc -l | tr -d ' ')" = "$((N0 + 2))" ] && [ ! -e "$PEND" ] && ok "model-switch: 終了後に保留分を移して記録" || ng "model-switch: 保留分の移動"
+
+# 11) 4回目の審査: 保留の記録は機械的な書式の行だけ移す・モデル名の無害化・Stop ゲートの開始時刻の検証
+PRIV="/Us""ers/someone/secret"
+printf '2026-10-08T00:00:00Z | x | %s\n' "$PRIV" > "$PEND"
+printf '%s' '{"from_model":"c","to_model":"d"}' | bash "$R/.claude/hooks/log-model-switch.sh" >/dev/null 2>&1
+! grep -q "$PRIV" "$ESC" && [ ! -e "$PEND" ] && ok "model-switch: 書式に合わない保留行（非公開の印）は公開の記録へ移さない" || ng "model-switch: 不正な保留行"
+printf '%s' "{\"from_model\":\"x$PRIV\",\"to_model\":\"e f\"}" | bash "$R/.claude/hooks/log-model-switch.sh" >/dev/null 2>&1
+! grep -q "$PRIV" "$ESC" && tail -n 1 "$ESC" | grep -q '| e_f |' && ok "model-switch: モデル名のパスや空白を無害化" || ng "model-switch: モデル名の無害化"
+sleep 1
+printf '%s' '{"session_id":"test-3","source":"startup"}' | bash "$R/.claude/hooks/restore-charter.sh" >/dev/null 2>&1
+echo abc > "$R/state/.sessions/test-3.start"
+OUT="$(printf '%s' '{"session_id":"test-3","stop_hook_active":false}' | bash "$R/.claude/hooks/stop-gate.sh")"
+printf '%s' "$OUT" | grep -q '"block"' && ok "stop-gate: 開始時刻が数字でなければ印の更新時刻で判定（ゲートは外れない）" || ng "stop-gate: 数字でない開始時刻"
+echo 99999999999 > "$R/state/.sessions/test-3.start"
+OUT="$(printf '%s' '{"session_id":"test-3","stop_hook_active":false}' | bash "$R/.claude/hooks/stop-gate.sh")"
+printf '%s' "$OUT" | grep -q '"block"' && ok "stop-gate: 未来の開始時刻は使わない" || ng "stop-gate: 未来の開始時刻"
 
 echo "---- $pass passed, $fail failed"
 [ "$fail" = 0 ]

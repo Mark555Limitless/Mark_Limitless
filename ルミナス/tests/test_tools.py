@@ -49,7 +49,7 @@ case "$FAKE_MODE" in
   pycache_link) ln -s "$FAKE_TARGET" orch/__pycache__ ;;
   pytestcache_file) echo x > .pytest_cache ;;
   syswrites) mkdir -p logs state/.sessions && echo '{"b":2}' >> data/usage.jsonl && echo "g" >> logs/gemini.log && : > logs/gemini.lock \
-             && : > data/usage.lock && date +%s > state/.sessions/other.start && echo "e" >> state/.sessions/escalations.pending && echo "VERSION_INFO = 2" >> orch/__init__.py ;;
+             && : > data/usage.lock && date +%s > state/.sessions/other.start && : > state/.sessions/other.edited && echo "VERSION_INFO = 2" >> orch/__init__.py ;;
   truncate_log) : > data/usage.jsonl ;;
   exec_log) chmod +x data/usage.jsonl ;;
   fifo) mkfifo orch/pipe ;;
@@ -66,6 +66,12 @@ case "$FAKE_MODE" in
   negative_usd) echo '{"ts": "2026-10-08T00:00:00+09:00", "vendor": "gemini", "usd": -100}' >> data/usage.jsonl ;;
   nan_usd) echo '{"ts": "2026-10-08T00:00:00+09:00", "vendor": "gemini", "usd": NaN}' >> data/usage.jsonl ;;
   badjson) echo 'not json' >> data/usage.jsonl ;;
+  pending_inject) mkdir -p state/.sessions && printf 'x | %s\n' "$FAKE_MARK" >> state/.sessions/escalations.pending && echo "VERSION_INFO = 6" >> orch/__init__.py ;;
+  start_rewind) echo 1 > state/.sessions/s.start ;;
+  start_forward) echo 2000000100 > state/.sessions/s.start ;;
+  start_text) mkdir -p state/.sessions && echo abc > state/.sessions/new.start ;;
+  edited_content) mkdir -p state/.sessions && echo payload > state/.sessions/x.edited ;;
+  lock_content) echo payload >> data/usage.lock ;;
   escalations) mkdir -p state && printf 'x | %s\n' "$FAKE_MARK" >> state/escalations.log && echo "VERSION_INFO = 5" >> orch/__init__.py ;;
 esac
 [ -n "$out" ] && echo "変更しました" > "$out"
@@ -475,6 +481,35 @@ def test_ok_output_lists_system_file_changes(proj):
     _seed_ledger(proj[0])
     r = run(proj, "syswrites")
     assert r.returncode == 0 and "記録ファイルの追記" in r.stdout and "data/usage.jsonl" in r.stdout
+
+
+# ---- 4回目の審査で指摘された抜け道（保留の記録・印のファイルの中身・HFS+ の無視される文字） ----
+def _seed_markers(p):
+    (p / "state" / ".sessions").mkdir(parents=True, exist_ok=True)
+    (p / "state" / ".sessions" / "s.start").write_text("2000000000\n", encoding="utf-8")
+    (p / "data").mkdir(exist_ok=True)
+    (p / "data" / "usage.lock").write_text("", encoding="utf-8")
+
+
+@pytest.mark.parametrize("mode", ["pending_inject", "start_rewind", "start_text", "edited_content", "lock_content"])
+def test_marker_content_tampering_is_violation(proj, mode):
+    _seed_markers(proj[0])
+    r = run(proj, mode)
+    assert r.returncode == 3, (mode, r.stdout, r.stderr)
+
+
+def test_start_marker_may_move_forward(proj):
+    _seed_markers(proj[0])
+    r = run(proj, "start_forward")
+    assert r.returncode == 0, r.stderr
+
+
+def test_git_name_ignores_hfs_ignorable_chars():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sc", ROOT / "tools" / "scope_check.py")
+    sc = importlib.util.module_from_spec(spec); spec.loader.exec_module(sc)
+    assert sc.is_git_name(".g\u200cit") and sc.is_git_name("\ufeff.GIT") and sc.is_git_name(".gi\u206at")
+    assert not sc.is_git_name(".github") and not sc.is_git_name(".gitignore")
 
 
 # ---- 意見役 ----
