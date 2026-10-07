@@ -21,3 +21,8 @@ state/.session-end.log
 state/jev/
 __pycache__/
 *.pyc
+
+# サポートAI の一時ファイル
+docs/*-replies/*.err
+# セッション別の一時ファイル
+state/.sessions/

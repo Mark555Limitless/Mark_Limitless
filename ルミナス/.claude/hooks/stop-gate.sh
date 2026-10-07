@@ -1,28 +1,38 @@
 #!/usr/bin/env bash
-# Stop hook: 「毎回書く」の強制。セッション開始後に今日の digest と state/latest.md が更新されていなければ停止をブロックする。
-# ループ防止: stop_hook_active=true（既にこの hook で続行中）なら必ず許可。緊急時は LUMINOUS_STOP_GATE=off で無効化。
+# Stop hook: 「毎回書く」の強制。このセッションの開始後に 今日の digest・state/latest.md・obsidian/ルミナス.md が更新されていなければ停止をブロック。
+# - stop_hook_active=true（既に続行中）なら必ず許可（ループ防止。Claude Code 側にも連続上限あり）
+# - 開始時刻はセッション別（state/.sessions/<id>.start）。日付は LUMINOUS_TZ（既定 Asia/Tokyo）
+# - LUMINOUS_GATE_MODE=edits なら、このセッションでファイル編集が無かった場合は許可（既定 always）
+# - LUMINOUS_STOP_GATE=off は、今日の digest に「STOP_GATE=off」と理由が書かれている場合だけ有効
 set -u
-INPUT="$(cat)"
-[ "${LUMINOUS_STOP_GATE:-on}" = "off" ] && exit 0
-ACTIVE="$(printf '%s' "$INPUT" | jq -r '.stop_hook_active // false' 2>/dev/null)"
-[ "$ACTIVE" = "true" ] && exit 0
-
 ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
-MARK="$ROOT/state/.session-start"
-[ -f "$MARK" ] || exit 0          # 開始時刻が無ければ判定しない
+. "$ROOT/.claude/hooks/_lib.sh"
+INPUT="$(cat)"
+[ "$(hook_json_get "$INPUT" stop_hook_active)" = "true" ] && exit 0
+SID="$(hook_session_id "$INPUT")"
+MARK="$ROOT/state/.sessions/$SID.start"
+[ -f "$MARK" ] || exit 0
 START="$(cat "$MARK" 2>/dev/null || echo 0)"
-TODAY="$(date +%Y-%m-%d)"
+TODAY="$(TZ="${LUMINOUS_TZ:-Asia/Tokyo}" date +%Y-%m-%d)"
 DIGEST="$ROOT/digest/$TODAY.md"
-LATEST="$ROOT/state/latest.md"
-mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
+
+if [ "${LUMINOUS_STOP_GATE:-on}" = "off" ]; then
+  if [ -f "$DIGEST" ] && grep -q 'STOP_GATE=off' "$DIGEST"; then exit 0; fi
+  jq -n --arg d "digest/$TODAY.md" '{decision:"block", reason:("Stop ゲートを解除するには、" + $d + " に「STOP_GATE=off: 理由」を書いてください（ROUTINE §5）。")}' 2>/dev/null \
+    || { echo "Stop ゲート解除には digest に「STOP_GATE=off: 理由」が必要です。" >&2; exit 2; }
+  exit 0
+fi
+if [ "${LUMINOUS_GATE_MODE:-always}" = "edits" ] && [ ! -f "$ROOT/state/.sessions/$SID.edited" ]; then exit 0; fi
 
 MISSING=""
-if [ ! -f "$DIGEST" ] || [ "$(mtime "$DIGEST")" -lt "$START" ]; then MISSING="$MISSING digest/$TODAY.md"; fi
-if [ ! -f "$LATEST" ] || [ "$(mtime "$LATEST")" -lt "$START" ]; then MISSING="$MISSING state/latest.md"; fi
+check() { # $1=相対パス $2=最低行数
+  local f="$ROOT/$1"
+  if [ ! -f "$f" ] || [ "$(hook_mtime "$f")" -lt "$START" ] || [ "$(wc -l < "$f")" -lt "$2" ]; then MISSING="$MISSING $1"; fi
+}
+check "digest/$TODAY.md" 5
+check "state/latest.md" 5
+check "obsidian/ルミナス.md" 5
 [ -z "$MISSING" ] && exit 0
-
-jq -n --arg m "$MISSING" '{
-  decision: "block",
-  reason: ("ルミナス ROUTINE §3: 終了前に次のファイルを今日の内容で更新してください →" + $m + "。digest には やったこと・判断・数値・未解決・次の一手 を、latest.md には直近状態を書く。書き終えたら停止してよい。")
-}'
+REASON="ルミナス ROUTINE §3: 終了前に次を今日の内容で更新してください →$MISSING 。digest には やったこと・判断・数値（実測）・未解決・次の一手、latest.md には直近状態、obsidian/ルミナス.md には「最新」節の 1 行。書き終えたら停止してよい。"
+if command -v jq >/dev/null 2>&1; then jq -n --arg r "$REASON" '{decision:"block", reason:$r}'; else echo "$REASON" >&2; exit 2; fi
 exit 0

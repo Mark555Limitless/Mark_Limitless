@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# git の pre-commit: 実際にコミットされるステージ済み差分を検査する（本命のガード。scripts/setup.sh で有効化）
+set -u
+ROOT="$(git rev-parse --show-toplevel)"
+SCAN="$ROOT/ルミナス/scripts/secret-scan.sh"; [ -x "$SCAN" ] || SCAN="$ROOT/scripts/secret-scan.sh"
+[ -x "$SCAN" ] || { echo "pre-commit: secret-scan.sh が見つかりません"; exit 1; }
+if ! git diff --cached -U0 | grep -E '^\+' | grep -vE '^\+\+\+' | bash "$SCAN"; then
+  echo "pre-commit: 鍵・トークンらしき文字列がステージされています。除去してから再度コミットしてください（憲章 I-4）。" >&2
+  exit 1
+fi
+exit 0

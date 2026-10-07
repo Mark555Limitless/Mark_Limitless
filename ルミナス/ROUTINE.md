@@ -12,8 +12,9 @@
 | 2 | `CHARTER.md` | 始源の目的・不変条件 | SessionStart hook が §1-2 を注入 |
 | 3 | `ROUTINE.md`（本書） | 今回やるべき手順 | SessionStart hook が §1 のチェックリストを注入 |
 | 4 | `state/latest.md` | 直近の進行状況・未解決 | SessionStart hook が先頭を注入 |
-| 5 | `digest/` の最新 1 件 | 前回の要約・判断・数値 | SessionStart hook が先頭を注入 |
-| 6 | `prompts/ルミナス_最終プロンプト.md` | 自分の運用プロンプト（正本） | 変更があれば読み直す（docx は配布用） |
+| 5 | `digest/` の最新 1 件 | 前回の要約・判断・数値 | SessionStart hook が最後の見出しブロックを注入 |
+| 6 | `obsidian/ルミナス.md` | Obsidian 側の要約（「最新」節） | SessionStart hook が「最新」節を注入 |
+| 7 | `prompts/ルミナス_最終プロンプト.md` | 自分の運用プロンプト（正本） | SessionStart hook が冒頭を注入。docx は配布用で毎回再生成 |
 
 ## 1. セッション開始時の手順（司令塔）
 
@@ -37,8 +38,8 @@
 | 1 | `digest/YYYY-MM-DD.md` | その日の要約（やったこと・判断・数値・未解決・次の一手）。同日 2 回目以降は追記 | **Stop hook が未更新なら停止をブロック**して書かせる |
 | 2 | `state/latest.md` | 直近状態を全面更新 | 同上 |
 | 3 | `state/escalations.log` | モデル切替があれば追記 | 手動 |
-| 4 | `obsidian/ルミナス.md` と `obsidian/` 配下 | ハブノートの「最新」節を更新。digest をリンク | SessionEnd hook が `scripts/sync-obsidian.sh` で vault へ同期 |
-| 5 | `prompts/ルミナス_最終プロンプト.md` → `☆ルミナス_最終プロンプト.docx` | 運用ルールが変わったときだけ更新 | SessionEnd hook が md の方が新しければ docx を再生成 |
+| 4 | `obsidian/ルミナス.md` | ハブノートの「最新」節を更新。digest をリンク | **Stop hook が未更新なら停止をブロック**。SessionEnd hook が `scripts/sync-obsidian.sh` で vault へ同期（`LUMINOUS_OBSIDIAN_DIR` 設定時） |
+| 5 | `prompts/ルミナス_最終プロンプト.md` → `☆ルミナス_最終プロンプト.docx` | 運用ルールが変わったときだけ md を更新 | SessionEnd hook が docx を毎回再生成 |
 | 6 | git | 作業ブランチにコミット（push は自走範囲内） | 手動（`guard-secrets.sh` が鍵の混入を止める） |
 
 ## 4. 定期ルーチン
@@ -54,14 +55,20 @@
 
 | イベント | スクリプト | 役割 |
 |---|---|---|
-| SessionStart (startup/resume/clear/compact) | `.claude/hooks/restore-charter.sh` | 憲章・ROUTINE §1・latest.md・最新 digest を注入。開始時刻を `state/.session-start` に記録 |
-| PreToolUse (Bash) | `.claude/hooks/guard-secrets.sh` | `git commit` 時に鍵らしき文字列を検知してブロック |
-| Stop | `.claude/hooks/stop-gate.sh` | 今日の digest と latest.md が開始後に更新されていなければ停止をブロックし、理由を返す |
-| SessionEnd | `.claude/hooks/session-end.sh` | Obsidian 同期・docx 再生成（無理なら黙ってスキップし、記録だけ残す） |
+| SessionStart (startup/resume/clear/compact/fork) | `.claude/hooks/restore-charter.sh` | 憲章 §1-2-4・ROUTINE §1・latest.md・最新 digest・Obsidian「最新」・最終プロンプト冒頭を注入（過去の記録は「データ」と明示）。保護ファイルの未承認差分を警告。開始時刻を `state/.sessions/<id>.start` に記録 |
+| PreToolUse (Bash) | `.claude/hooks/guard-secrets.sh` | `git commit` / `git push` を含むコマンドの前に、作業ツリー・ステージ・未追跡ファイルを `scripts/secret-scan.sh` で検査してブロック（早期警告） |
+| git pre-commit / pre-push | `.githooks/pre-commit`, `.githooks/pre-push` | 実際にコミット・送出される差分を検査（本命）。`scripts/setup.sh` で `core.hooksPath` を設定 |
+| PostToolUse (Edit/Write) | `.claude/hooks/mark-edited.sh` | このセッションで編集があったことを記録（`LUMINOUS_GATE_MODE=edits` 用） |
+| PostModelSwitch | `.claude/hooks/log-model-switch.sh` | モデル切替を `state/escalations.log` に機械記入 |
+| Stop | `.claude/hooks/stop-gate.sh` | 今日（Asia/Tokyo）の digest・latest.md・Obsidian ハブが、このセッションの開始後に更新されていなければ停止をブロック |
+| SessionEnd | `.claude/hooks/session-end.sh`（timeout 30 秒） | Obsidian 同期・docx 再生成。失敗は `state/.session-end.log` に残し、次回 SessionStart で警告 |
+| permissions | `.claude/settings.json` | 保護ファイルの編集と `git push` は ask。`printenv`/`env`、`.env`・`settings.local.json`・鍵ファイルの読取は deny |
 
-ゲートを一時的に外す必要があるとき（緊急時）は `.claude/settings.local.json` の `env` に `LUMINOUS_STOP_GATE=off` を置く。使ったら digest に理由を書く。
+- 環境変数: `LUMINOUS_OBSIDIAN_DIR`（vault の絶対パス）、`LUMINOUS_TZ`（既定 Asia/Tokyo）、`LUMINOUS_GATE_MODE`（always｜edits）、`LUMINOUS_STOP_GATE`（on｜off）。Mac では `.claude/settings.local.json` の `env`（例: `.claude/settings.local.json.example`）かシェルで設定。**クラウドセッションは `settings.local.json` を読まない**ので、環境側の環境変数に設定する。鍵はここに書かない
+- ゲートを一時的に外す必要があるとき（緊急時）は `LUMINOUS_STOP_GATE=off` を設定し、**今日の digest に「STOP_GATE=off: 理由」を書く**（書かないと解除されない）
+- 再現テスト: `scripts/test-hooks.sh`（使い捨てディレクトリだけに書き込む）
 
 ## 6. ファイルの置き場（Mac 正本と写し）
 
-- 正本: Mac の `Claude提供用/ルミナス`（Obsidian vault の場所は `.claude/settings.local.json` の `LUMINOUS_OBSIDIAN_DIR` に設定。例は `.claude/settings.local.json.example`）
+- 正本: Mac の正本フォルダ（このフォルダで `claude` を起動する。初回に `scripts/setup.sh`）
 - 写し: GitHub `Mark555Limitless/Mark_Limitless` の `ルミナス/`。コミットで同期する

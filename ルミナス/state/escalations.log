@@ -1,2 +1,6 @@
-# date_time | task | from_model | to_model | reason | result
-2026-10-07T17:30Z | 構想書v0.1レビュー | claude-sonnet-5-5 | - | 文書レビューはSonnetで十分と判断（Mark指示[1]: 最安十分） | 審査中。上位審査が必要な論点が出れば Opus へ
+# date_time(UTC) | task | from_model | to_model | reason | result
+# 2026-10-07 訂正: 以前の 1 行目「17:30Z」は手書きで、実際の記録時刻より未来だった（憲章 I-3 違反）。以後は PostModelSwitch hook と date -u で機械記入する。
+2026-10-07T16:00Z頃（開始時刻は推定） | 構想 v0.1 の起草・調査 | - | claude-fable-5-1 | このセッションの開始モデル（Mark の環境設定）。司令塔の既定 Opus 5.5 より上位で始まっていた | 起草を完了。記録漏れを後から訂正
+2026-10-07T17:00Z頃（推定） | 構想 v0.1 の審査 | claude-fable-5-1 | claude-sonnet-5-5 | 文書レビューは Sonnet で十分（Mark 指示[1]: 最安十分） | 24 件の指摘（重大 5）。うち 5 論点は上位審査が必要と自己申告
+2026-10-07T17:25:57Z | 統治・安全の 5 論点の上位審査 | claude-sonnet-5-5 | claude-opus-5-5 | Sonnet が判断しきれないとした論点（憲章と Mark の指示の衝突、自己改変、外部送信と規約、未検証事実、Jev の評価循環）。Fable までは不要と判断 | 審査中
+2026-10-07T17:25:57Z | 司令塔セッション | claude-fable-5-1 | claude-opus-5-5 | 実行環境側でのモデル切替（司令塔の判断ではない）。以後の司令塔作業は Opus 5.5 | 継続中

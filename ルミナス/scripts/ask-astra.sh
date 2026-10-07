@@ -14,8 +14,13 @@ OUT="$ROOT/docs/astra-replies/$(date +%Y%m%d)-$NAME.md"
 
 command -v "$CODEX" >/dev/null 2>&1 || { echo "codex が見つかりません。npm i -g @openai/codex でインストールするか CODEX_BIN を指定してください。" >&2; exit 3; }
 if ! "$CODEX" login status >/dev/null 2>&1; then
-  echo "Codex にログインしていません。Mark 本人が手元で \`codex login\`（ブラウザ）を実行してください。鍵をチャットや本フォルダに貼らないこと（憲章 I-4）。" >&2
-  exit 4
+  if [ -n "${OPENAI_API_KEY:-}" ]; then
+    # 鍵の値はこのスクリプト内でだけ流れ、画面にもファイルにも出さない（憲章 I-4）
+    printf '%s' "$OPENAI_API_KEY" | "$CODEX" login --with-api-key >/dev/null 2>&1 || { echo "codex login（API キー）に失敗しました。" >&2; exit 4; }
+  else
+    echo "Codex にログインしていません。Mark 本人が手元で \`codex login\`（ブラウザ）を実行してください。鍵をチャットや本フォルダに貼らないこと（憲章 I-4）。" >&2
+    exit 4
+  fi
 fi
 
 mkdir -p "$(dirname "$OUT")"
@@ -24,14 +29,17 @@ mkdir -p "$(dirname "$OUT")"
   echo
   echo "- 日時: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "- モデル指定: $MODEL（実際に使われたモデルは Codex 側の表示を確認）"
-  echo "- パケット: $(realpath --relative-to="$ROOT" "$PACKET" 2>/dev/null || echo "$PACKET")"
+  echo "- パケット: ${PACKET#"$ROOT"/}"
   echo "- 取り込み規則: docs/astra-consultation.md（憲章 I-6 で裏取りしてから採用）"
   echo
   echo "---"
   echo
 } > "$OUT"
 
-# パケット本文を stdin で渡す（プロンプト引数には役割指定だけ）
+# パケット本文を stdin で渡す（プロンプト引数には役割指定だけ）。
+# 注: codex exec がカスタムエージェント TOML を名前で読むかは公式文書で未確認のため、役割は文面でも指定する。
+# 注: 送る前に秘匿情報が混ざっていないか検査する（憲章 I-4）
+bash "$ROOT/scripts/secret-scan.sh" --quiet < "$PACKET" || { echo "パケットに鍵らしき文字列があるため送信を中止しました。" >&2; exit 6; }
 if ! "$CODEX" exec -C "$ROOT" -s "$SANDBOX" -m "$MODEL" \
      "あなたは .codex/agents/astra-architect.toml の役割（第二意見・反証役）です。AGENTS.md と CHARTER.md を読んでから、stdin のパケットに日本語で答えてください。" \
      < "$PACKET" >> "$OUT" 2> "$OUT.err"; then
@@ -39,4 +47,4 @@ if ! "$CODEX" exec -C "$ROOT" -s "$SANDBOX" -m "$MODEL" \
   exit 5
 fi
 rm -f "$OUT.err"
-echo "保存: $(realpath --relative-to="$ROOT" "$OUT")"
+echo "保存: ${OUT#"$ROOT"/}"

@@ -1,34 +1,48 @@
 {
+  "permissions": {
+    "ask": [
+      "Edit(/CHARTER.md)",
+      "Edit(/VIRTUAL_MARK.md)",
+      "Edit(/ROUTINE.md)",
+      "Edit(/CLAUDE.md)",
+      "Edit(/AGENTS.md)",
+      "Edit(/.claude/**)",
+      "Edit(/.codex/**)",
+      "Edit(/.githooks/**)",
+      "Bash(git push *)"
+    ],
+    "deny": [
+      "Bash(printenv *)",
+      "Bash(env *)",
+      "Read(.env)",
+      "Read(**/.env.*)",
+      "Read(/.claude/settings.local.json)",
+      "Read(**/*.pem)",
+      "Read(**/*.p8)",
+      "Read(**/*.key)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
-      {
-        "matcher": "startup|resume|clear|compact",
-        "hooks": [
-          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/restore-charter.sh\"" }
-        ]
-      }
+      { "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/restore-charter.sh\"" } ] }
     ],
     "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-secrets.sh\"" }
-        ]
-      }
+      { "matcher": "Bash",
+        "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-secrets.sh\"" } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/mark-edited.sh\"" } ] }
+    ],
+    "PostModelSwitch": [
+      { "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/log-model-switch.sh\"" } ] }
     ],
     "Stop": [
-      {
-        "hooks": [
-          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-gate.sh\"" }
-        ]
-      }
+      { "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-gate.sh\"" } ] }
     ],
     "SessionEnd": [
-      {
-        "hooks": [
-          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-end.sh\"" }
-        ]
-      }
+      { "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-end.sh\"", "timeout": 30 } ] }
     ]
   }
 }

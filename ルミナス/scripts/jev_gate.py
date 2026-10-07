@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Jev（TypeSafe AI）を Verifier のゲートとして呼ぶ薄いアダプタ。
+"""Jev（TypeSafe AI）を Verifier のゲートとして呼ぶ薄いアダプタ。【実験・未検証: 公式ドキュメント本文未読。Mark の目視と併用し単独運用しない】
 
 Jev は文章を生成せず、型付きの判定だけを返す（公開情報: Noul=はい/いいえの確率、Choice=選択肢と確率・信頼度、
 Score=2〜10 段階の採点と確率・信頼度）。本スクリプトは「state（判定対象）＋質問」を送り、判定と閾値の結論を
@@ -42,7 +42,13 @@ def main() -> int:
     a = ap.parse_args()
 
     state = Path(a.state_file).read_text(encoding="utf-8")
+    # 送信前に秘匿情報を検査（憲章 I-4）。第三者へ渡す文書なので鍵らしき文字列があれば中止
+    import subprocess
+    scan = ROOT / "scripts" / "secret-scan.sh"
+    if scan.exists() and subprocess.run(["bash", str(scan), "--quiet"], input=state.encode("utf-8"), capture_output=True).returncode != 0:
+        print("判定対象に鍵らしき文字列があるため送信を中止しました。", file=sys.stderr); return 7
     questions = json.loads(Path(a.questions).read_text(encoding="utf-8"))
+    thresholds = {k: q.pop("threshold") for k, q in questions.items() if isinstance(q, dict) and "threshold" in q}
     provider = os.getenv("JEV_PROVIDER", "typesafe")
     if provider == "openrouter":
         url = "https://openrouter.ai/api/alpha/decisions"
@@ -83,7 +89,8 @@ def main() -> int:
         if not isinstance(ans, dict):
             verdict[name] = ans
         elif q.get("type") == "noul" and isinstance(ans.get("noul"), (int, float)):
-            verdict[name] = {"yes": ans["noul"] >= a.threshold, "p": ans["noul"]}
+            th = float(thresholds.get(name, a.threshold))
+            verdict[name] = {"yes": ans["noul"] >= th, "p": ans["noul"], "threshold": th}
         else:
             summary = {k: v for k, v in ans.items() if k in ("type", "choice", "score", "confidence", "selected", "probabilities")}
             verdict[name] = summary or ans

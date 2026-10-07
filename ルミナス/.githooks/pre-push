@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# git の pre-push: リモートへ出ていくコミット全体を検査する（公開リポジトリ対策。scripts/setup.sh で有効化）
+set -u
+ROOT="$(git rev-parse --show-toplevel)"
+SCAN="$ROOT/ルミナス/scripts/secret-scan.sh"; [ -x "$SCAN" ] || SCAN="$ROOT/scripts/secret-scan.sh"
+[ -x "$SCAN" ] || { echo "pre-push: secret-scan.sh が見つかりません"; exit 1; }
+Z40="0000000000000000000000000000000000000000"
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$Z40" ] && continue
+  if [ "$remote_sha" = "$Z40" ]; then RANGE="$local_sha --not --remotes"; else RANGE="$remote_sha..$local_sha"; fi
+  if ! git log -p -U0 --format= $RANGE -- . ':(exclude)*.docx' ':(exclude)*.png' ':(exclude)*.jpg' ':(exclude)*.pdf' | grep -E '^\+' | grep -vE '^\+\+\+' | bash "$SCAN"; then
+    echo "pre-push: 送出するコミットに鍵・トークンらしき文字列があります。履歴から除去してから push してください（憲章 I-4, I-5）。" >&2
+    exit 1
+  fi
+done
+exit 0

@@ -1,6 +1,9 @@
 {
+  "_comment": "ローカル専用設定の例（git 管理外）。鍵・パスワードはここに書かない。クラウドセッションは settings.local.json を読まないので、同じ値を環境の env に設定する。",
   "env": {
-    "LUMINOUS_OBSIDIAN_DIR": "/path/to/your/Obsidian/Vault",
+    "LUMINOUS_OBSIDIAN_DIR": "/絶対パス/Obsidian/Vault",
+    "LUMINOUS_TZ": "Asia/Tokyo",
+    "LUMINOUS_GATE_MODE": "always",
     "LUMINOUS_STOP_GATE": "on"
   }
 }

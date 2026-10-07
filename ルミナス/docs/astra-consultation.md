@@ -1,4 +1,4 @@
-# Codex（GPT-6 Astra）への相談・作業分担 v0.2
+# Codex（GPT-6 Astra）への相談・作業分担（構想 v0.1 用）
 
 ## 現状（2026-10-07）
 
@@ -26,7 +26,7 @@ npm i -g @openai/codex
 codex login
 
 # 2) ルミナスのフォルダで、パケットを渡す（モデルは環境に合わせて）
-cd "Claude提供用/ルミナス"
+cd "<Mac の正本フォルダ>"
 ASTRA_MODEL=gpt-6-astra scripts/ask-astra.sh docs/astra-packets/WP-1-architecture-review.md
 scripts/ask-astra.sh docs/astra-packets/WP-2-eval-set-v0.md
 scripts/ask-astra.sh docs/astra-packets/WP-3-hooks-redteam.md
@@ -48,6 +48,6 @@ scripts/ask-astra.sh docs/astra-packets/WP-4-codex-integration.md
 
 1. クラウド環境の設定で、ネットワーク許可に `api.openai.com`・`auth.openai.com`・`chatgpt.com`（Codex）、`api.typesafe.ai`（Jev）を追加する（Gemini の `generativelanguage.googleapis.com` は既に到達可）
 2. 同じ設定画面の「Network secrets（API 資格情報）」または環境変数に `OPENAI_API_KEY`・`GEMINI_API_KEY`・`TYPESAFE_API_KEY` を登録する。チャットには貼らない
-3. 新しいセッションで `printenv OPENAI_API_KEY | codex login --with-api-key` を司令塔が実行する（値は表示しない）。以後 `scripts/ask-astra.sh` がそのまま使える
+3. 新しいセッションで `scripts/ask-astra.sh` を実行すると、スクリプト自身が環境変数から Codex にログインする（司令塔は値を扱わず、表示もしない）。残るリスクは `docs/support-ai.md` §1 のとおり
 
 この設定が無い間は §2 の手順で分担する。

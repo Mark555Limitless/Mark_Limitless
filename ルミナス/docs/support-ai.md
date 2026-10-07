@@ -1,6 +1,6 @@
 # サポートAI（Codex・Gemini・Jev）— AI NEWS Select の仕組みをルミナスへ移す v0.1
 
-> Mark の「Fable5.1 AI NEWS Select」（X: @Fable5AINEWS、AIニュースの検証と解説）では、司令塔 Claude のもとで
+> Mark の「Fable5.1 AI NEWS Select」（AIニュースの検証と解説）では、司令塔 Claude のもとで
 > **Codex・Gemini・Jev を常用**している。ルミナスはその三者を「サポートAI」として同じ位置に置く。
 > AI NEWS Select 側の定義ファイル（CLAUDE.md / ROUTINE.md / digest 等）は本調査では見つからなかったため、
 > 本書は Mark の指示と各サービスの公開情報から再構成したものである。**実物のファイルを `docs/ai-news-select-ref/` に置いてもらえれば、
@@ -14,7 +14,8 @@
 | **Gemini**（Gemini CLI / API） | 長文・多モーダル・Google 検索グラウンディング、別ベンダーの視点 | **StarPulse（調査）** と **クロスベンダー検証**（Claude/Codex と答えが割れたときの第三の目） | `scripts/ask-gemini.sh <パケット>`（`gemini -p`） | `GEMINI_API_KEY` |
 | **Jev**（TypeSafe AI） | 文章を生成せず、型付きの判定だけを返す（Noul=はい/いいえの確率、Choice=選択、Score=採点） | **Verifier のゲート**: GO/NO-GO、出典の信頼度分類、エスカレーション要否、憲章違反の疑いフラグ | `scripts/jev_gate.py`（`POST /v1/systemone`。OpenRouter 経由も可） | `TYPESAFE_API_KEY`（OpenRouter 経由なら `OPENROUTER_API_KEY`） |
 
-鍵はいずれも **環境変数で渡す**。ファイル・チャット・コミットに書かない（憲章 I-4）。ルミナスは値を表示しない。
+鍵はいずれも **Mark のシェルや OS のキーチェーンから、各ラッパースクリプトが実行時に読む**。ファイル（`settings.local.json` を含む）・チャット・コミットに書かない（憲章 I-4）。
+司令塔は値を表示・記録しない。`printenv`・`env` と鍵ファイルの読取は permissions で deny しているが、環境変数は原理的にプロセスから読めるため、残るリスクは「司令塔のセッション環境に鍵を置かない」運用で下げる（鍵が要るのはラッパーを実行する Mark のシェル側）。
 
 ## 2. なぜこの三者か（AI NEWS Select の仕組みの読み替え）
 
@@ -49,8 +50,8 @@ Jev を「ゲート」に置く理由: 文章を生成しないので速く安�
 | `api.typesafe.ai`（または `openrouter.ai`） | Jev | 遮断（403） |
 | `api.x.ai` | Grok | 遮断（403） |
 
-クラウド環境の設定で上記を許可し、鍵を「Network secrets／環境変数」に登録すれば、新しいセッションから `scripts/ask-*.sh` がそのまま動く。
-Mac で動かす場合はシェルの環境変数に鍵を置く（`.claude/settings.local.json` の `env` でもよい。git 管理外）。
+クラウド環境で動かすには上記ホストの許可と、環境側の「Network secrets／環境変数」への鍵登録が必要（司令塔の環境にも鍵が見える点は上記のとおり残るリスク。許可ホストは最小限にする）。
+Mac で動かす場合は Mark のシェル環境（キーチェーン経由を推奨）に鍵を置き、`.claude/settings.local.json` には書かない。
 
 ## 5. 未確認・要確認
 
