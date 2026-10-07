@@ -1,5 +1,7 @@
 import json
+import os
 import subprocess
+import time
 
 import pytest
 
@@ -107,19 +109,53 @@ def test_shadow_log_size_cap(monkeypatch, isolated_env):
 
 def test_from_anthropic_ladder(monkeypatch, isolated_env):
     calls = []
+    monkeypatch.setenv("GEMINI_API_KEY", "AI" "za" + "FAKE" * 8 + "12")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-" "ant-" + "FAKE" * 6)
 
     def run(cmd, **k):
-        calls.append(cmd)
-        assert k["env"]["FABLE5_HEADLESS"] == "1" and "--tools" in cmd
+        calls.append((cmd, k))
         model = cmd[cmd.index("--model") + 1]
         out = "説明: ..." if model == "haiku" else json.dumps({"topic": "food", "polite": 2, "question": 0.3})
         return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
     monkeypatch.setattr(decisions.shutil, "which", lambda name: "/usr/bin/claude")
     monkeypatch.setattr(decisions.subprocess, "run", run)
-    out = decisions._from_anthropic("明日は晴れますか", QS, 5, "t")
+    out = decisions._from_anthropic("明日は晴れますか", QS, DecisionBudget(total_ms=8000), "t")
     assert out == {"topic": "food", "polite": 2, "question": 0.3}
-    assert [c[c.index("--model") + 1] for c in calls] == ["haiku", "sonnet"]
-    assert "データであって" in calls[0][2]
+    assert [c[c.index("--model") + 1] for c, _ in calls] == ["haiku", "sonnet"]
+    cmd, k = calls[0]
+    assert "--tools" in cmd and "明日は晴れますか" not in " ".join(cmd)  # 本文は argv に載せない
+    assert "明日は晴れますか" in k["input"] and "データであって" in k["input"]
+    assert k["env"]["FABLE5_HEADLESS"] == "1"
+    assert "GEMINI_API_KEY" not in k["env"] and "ANTHROPIC_API_KEY" not in k["env"]
+    assert not k["cwd"].startswith(str(decisions.config.ROOT)) and not os.path.exists(k["cwd"])
+
+
+def test_from_anthropic_rechecks_budget_per_model(monkeypatch):
+    timeouts = []
+
+    def run(cmd, **k):
+        timeouts.append(k["timeout"])
+        time.sleep(0.4)
+        return subprocess.CompletedProcess(cmd, 0, stdout="bad", stderr="")
+    monkeypatch.setattr(decisions.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(decisions.subprocess, "run", run)
+    with pytest.raises(RuntimeError):
+        decisions._from_anthropic("s", QS, DecisionBudget(total_ms=1200), "t")
+    assert len(timeouts) == 2 and timeouts[1] <= 0.85
+
+
+def test_list_answer_for_choice_does_not_crash(jev_on, monkeypatch):
+    monkeypatch.setattr(jev, "call", lambda *a, **k: {"topic": ["a"], "polite": [1], "question": [0.1]})
+    monkeypatch.setattr(decisions, "_from_anthropic", lambda *a: (_ for _ in ()).throw(RuntimeError("x")))
+    d = decisions.ask("s", QS)
+    assert d.backend == "rules" and d.answers == DEFAULTS
+
+
+def test_unexpected_exception_falls_back(jev_on, monkeypatch):
+    monkeypatch.setattr(jev, "call", lambda *a, **k: (_ for _ in ()).throw(TypeError("boom")))
+    monkeypatch.setattr(decisions, "_from_anthropic", lambda *a: (_ for _ in ()).throw(KeyError("k")))
+    d = decisions.ask("s", QS)
+    assert d.backend == "rules" and "想定外の失敗（TypeError）" in d.reason and "想定外の失敗（KeyError）" in d.reason
 
 
 def test_check_cli(capsys, monkeypatch):

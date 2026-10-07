@@ -46,25 +46,36 @@ def _log(status: str, http: Any, model: str, ms: int, usd: float, purpose: str, 
         "ts": config.ts(), "status": status, "calls": 1, "usd": round(usd, 6), "http": http,
         "model": model, "ms": ms, "purpose": purpose[:80], "reason": reason,
     }
-    path = config.log_dir() / "jev.log"
-    with config.file_lock(path.with_suffix(".lock")):
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(config.redact(json.dumps(line, ensure_ascii=False)) + "\n")
-    usage.record("jev", model=model, purpose=purpose, usd=usd, status=status, ms=ms,
-                 extra={"http": http, "reason": reason})
+    try:
+        path = config.log_dir() / "jev.log"
+        with config.file_lock(path.with_suffix(".lock")):
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(config.redact(json.dumps(line, ensure_ascii=False)) + "\n")
+    except OSError:
+        pass
+    try:
+        usage.record("jev", model=model, purpose=purpose, usd=usd, status=status, ms=ms,
+                     extra={"http": http, "reason": reason})
+    except OSError:
+        pass
 
 
-def _usd(resp_json: Dict[str, Any], n_questions: int) -> float:
-    u = resp_json.get("usage") or {}
-    if isinstance(u.get("cost"), (int, float)):
+def _num(x: Any) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def _usd(resp_json: Any, n_questions: int) -> float:
+    u = resp_json.get("usage") if isinstance(resp_json, dict) else None
+    u = u if isinstance(u, dict) else {}
+    if _num(u.get("cost")):
         return float(u["cost"])
-    if isinstance(u.get("input_tokens"), (int, float)):
+    if _num(u.get("input_tokens")):
         return float(u["input_tokens"]) * PRICE_PER_M_INPUT / 1_000_000
     return FALLBACK_USD_PER_QUESTION * max(n_questions, 1)
 
 
 def call(state: str, questions: Dict[str, Dict[str, Any]], *, timeout_s: float = 8.0, purpose: str = "") -> Dict[str, Any]:
-    """Jev に問い合わせ、answers の辞書を返す。呼ばなかった・失敗したときは JevUnavailable。"""
+    """Jev に問い合わせ、answers の辞書を返す。呼ばなかった・失敗したときは JevUnavailable（失敗も1回に数える）。"""
     key = config.env("TYPESAFE_API_KEY")
     if config.env("JEV_ENABLED", "0") != "1":
         raise JevUnavailable("無効（JEV_ENABLED!=1）")
@@ -75,32 +86,35 @@ def call(state: str, questions: Dict[str, Dict[str, Any]], *, timeout_s: float =
         raise JevUnavailable(why)
     model = config.env("JEV_MODEL", "jev-latest") or "jev-latest"
     body = {"state": state, "model": model, "questions": questions}
+    t = max(float(timeout_s), 0.1)
     t0 = time.monotonic()
-    http: Any = None
+
+    def elapsed() -> int:
+        return int((time.monotonic() - t0) * 1000)
+
     try:
         resp = requests.post(config.env("JEV_ENDPOINT", DEFAULT_ENDPOINT),  # type: ignore[arg-type]
                              headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                             json=body, timeout=(5, timeout_s))
-        http = resp.status_code
-        ms = int((time.monotonic() - t0) * 1000)
-        if http != 200:
-            _log("error", http, model, ms, 0.0, purpose, f"HTTP {http}")
-            raise JevUnavailable(f"HTTP {http}")
-        data = resp.json()
-    except requests.RequestException:
-        ms = int((time.monotonic() - t0) * 1000)
-        _log("error", http, model, ms, 0.0, purpose, "通信失敗")
+                             json=body, timeout=(min(5.0, t), t))
+    except Exception:  # noqa: BLE001 通信の例外はすべて「通信失敗」（生のエラーは記録しない）
+        _log("error", None, model, elapsed(), 0.0, purpose, "通信失敗")
         raise JevUnavailable("通信失敗")
-    except ValueError:
-        ms = int((time.monotonic() - t0) * 1000)
-        _log("error", http, model, ms, FALLBACK_USD_PER_QUESTION, purpose, "解析失敗")
+    http = getattr(resp, "status_code", None)
+    if http != 200:
+        _log("error", http, model, elapsed(), 0.0, purpose, f"HTTP {http}")
+        raise JevUnavailable(f"HTTP {http}")
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001 JSON でない応答。処理された可能性があるので控えめに計上
+        _log("error", http, model, elapsed(), FALLBACK_USD_PER_QUESTION * max(len(questions), 1), purpose, "解析失敗")
         raise JevUnavailable("解析失敗")
-    answers = data.get("answers")
     usd = _usd(data, len(questions))
+    answers = data.get("answers") if isinstance(data, dict) else None
+    resp_model = str(data.get("model", model)) if isinstance(data, dict) else model
     if not isinstance(answers, dict):
-        _log("error", http, str(data.get("model", model)), ms, usd, purpose, "answers なし")
+        _log("error", http, resp_model, elapsed(), usd, purpose, "answers なし")
         raise JevUnavailable("answers なし")
-    _log("ok", http, str(data.get("model", model)), ms, usd, purpose, "ok")
+    _log("ok", http, resp_model, elapsed(), usd, purpose, "ok")
     return answers
 
 

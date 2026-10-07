@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
@@ -48,10 +49,11 @@ class Choice:
     def coerce(self, raw: Any) -> Optional[str]:
         if isinstance(raw, dict):
             for k in ("choice", "selected", "answer", "value"):
-                if raw.get(k) in self.options:
-                    return raw[k]
+                v = raw.get(k)
+                if isinstance(v, str) and v in self.options:
+                    return v
             return None
-        return raw if raw in self.options else None
+        return raw if isinstance(raw, str) and raw in self.options else None
 
 
 @dataclass
@@ -181,40 +183,62 @@ def _anthropic_prompt(state: str, questions: Dict[str, Question]) -> str:
     )
 
 
-def _from_anthropic(state: str, questions: Dict[str, Question], timeout_s: float, purpose: str) -> Dict[str, Any]:
+def _child_env() -> Dict[str, str]:
+    """claude -p に渡す環境: 鍵を外し（ANTHROPIC_API_KEY があると API 課金に切り替わり台帳とずれる）、無人実行の印を付ける。"""
+    env = {k: v for k, v in os.environ.items() if k not in config.SECRET_ENV_NAMES}
+    env["FABLE5_HEADLESS"] = "1"  # グローバルの SessionStart フックを止める
+    return env
+
+
+def _from_anthropic(state: str, questions: Dict[str, Question], budget: "DecisionBudget", purpose: str) -> Dict[str, Any]:
     claude = shutil.which("claude")
     if not claude:
         raise RuntimeError("claude CLI なし")
     prompt = _anthropic_prompt(state, questions)
-    env = dict(os.environ, FABLE5_HEADLESS="1")  # 無人実行の印（グローバルの SessionStart フックを止める）
+    env = _child_env()
     last = "失敗"
-    for model in config.MODEL_LADDER:
-        t0 = time.monotonic()
-        try:
-            proc = subprocess.run([claude, "-p", prompt, "--model", model, "--tools", ""],
-                                  capture_output=True, text=True, timeout=timeout_s, env=env)
-        except subprocess.TimeoutExpired:
-            usage.record("anthropic", model=model, purpose=purpose, status="error", ms=int((time.monotonic() - t0) * 1000))
-            last = "タイムアウト"
-            continue
-        ms = int((time.monotonic() - t0) * 1000)
-        m = re.search(r"\{.*\}", proc.stdout or "", re.S)
-        try:
-            raw = json.loads(m.group(0)) if (proc.returncode == 0 and m) else None
-        except json.JSONDecodeError:
-            raw = None
-        out = {}
-        if isinstance(raw, dict):
-            for k, q in questions.items():
-                v = q.coerce(raw.get(k))
-                if v is None:
-                    break
-                out[k] = v
-        if len(out) == len(questions):
-            usage.record("anthropic", model=model, purpose=purpose, status="ok", ms=ms)
-            return out
-        usage.record("anthropic", model=model, purpose=purpose, status="error", ms=ms)
-        last = "形式不正"
+    workdir = tempfile.mkdtemp(prefix="luminous-decide-")  # プロジェクトの外で起動する（project hooks を走らせない）
+    try:
+        for model in config.MODEL_LADDER:
+            left = budget.remaining_ms()
+            if left < 500:
+                last = "時間切れ"
+                break
+            t0 = time.monotonic()
+            try:
+                # 判断対象の本文は argv ではなく標準入力で渡す（ps に見せない・長さの上限を避ける）
+                proc = subprocess.run([claude, "-p", "標準入力の指示に従い、JSON オブジェクト1つだけを返してください。",
+                                       "--model", model, "--tools", ""],
+                                      input=prompt, capture_output=True, text=True, timeout=left / 1000,
+                                      env=env, cwd=workdir)
+            except subprocess.TimeoutExpired:
+                usage.record("anthropic", model=model, purpose=purpose, status="error", ms=int((time.monotonic() - t0) * 1000))
+                last = "タイムアウト"
+                continue
+            except OSError:
+                usage.record("anthropic", model=model, purpose=purpose, status="error", ms=int((time.monotonic() - t0) * 1000))
+                last = "起動失敗"
+                continue
+            ms = int((time.monotonic() - t0) * 1000)
+            m = re.search(r"\{.*\}", proc.stdout or "", re.S)
+            try:
+                raw = json.loads(m.group(0)) if (proc.returncode == 0 and m) else None
+            except json.JSONDecodeError:
+                raw = None
+            out: Dict[str, Any] = {}
+            if isinstance(raw, dict):
+                for k, q in questions.items():
+                    v = q.coerce(raw.get(k))
+                    if v is None:
+                        break
+                    out[k] = v
+            if len(out) == len(questions):
+                usage.record("anthropic", model=model, purpose=purpose, status="ok", ms=ms)
+                return out
+            usage.record("anthropic", model=model, purpose=purpose, status="error", ms=ms)
+            last = "形式不正"
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
     raise RuntimeError(last)
 
 
@@ -249,11 +273,13 @@ def ask(
                     raise jev.JevUnavailable("無効か鍵なし")
                 answers = _from_jev(state, questions, left / 1000, purpose)
             else:
-                answers = _from_anthropic(state, questions, max(left / 1000, 1), purpose)
+                answers = _from_anthropic(state, questions, budget, purpose)
             used = step
             break
-        except (jev.JevUnavailable, RuntimeError, OSError) as e:
+        except (jev.JevUnavailable, RuntimeError) as e:
             reasons.append(f"{step}: {e.args[0] if e.args else type(e).__name__}")
+        except Exception as e:  # noqa: BLE001 想定外の失敗でも本流を止めず既定値へ（生のメッセージは書かない）
+            reasons.append(f"{step}: 想定外の失敗（{type(e).__name__}）")
     if answers is None:
         answers = _defaults(questions)
         used = "rules"

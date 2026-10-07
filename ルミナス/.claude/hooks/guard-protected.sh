@@ -16,14 +16,16 @@ deny() { echo "ブロック（guard-protected）: $1" >&2; exit 2; }
 
 PROT='(CHARTER\.md|\.env\.example|VIRTUAL_MARK\.md|ROUTINE\.md|CLAUDE\.md|AGENTS\.md|最終プロンプト|\.claude/|\.codex/|\.githooks/|\.mcp\.json|secret-scan\.sh|sync-obsidian\.sh|build-final-prompt-docx\.mjs|package(-lock)?\.json)'
 WRITE='(sed[^|;&]*[[:space:]]-i|perl[^|;&]*[[:space:]]-i|>>?|[[:space:]]tee[[:space:]]|(^|[[:space:];&|(])(mv|cp|rm|truncate|chmod|chown|ln|install|rsync|dd|unlink|patch)[[:space:]]|git[[:space:]]+(checkout|restore|reset|mv|rm|apply|am|stash)[[:space:]]|(python3?|node|ruby|perl|php)[[:space:]]+(-c|-e|-)|write_text|writeFile|open\([^)]*["'"'"'][wa])'
-SECRET='(\.env([[:space:]"'"'"';|&)]|$)|\.env\.(local|prod|production|dev|bak)|settings\.local\.json|\.pem([[:space:]"'"'"']|$)|\.p8([[:space:]"'"'"']|$)|\.p12([[:space:]"'"'"']|$)|id_rsa|id_ed25519|\.netrc|credentials\.json)'
+SECRET='((^|[^A-Za-z0-9_])\.env(rc)?(\.[A-Za-z0-9_.-]+)?([^A-Za-z0-9_.-]|$)|settings\.local\.json|_非公開|env_backups|\.pem([[:space:]"'"'"']|$)|\.p8([[:space:]"'"'"']|$)|\.p12([[:space:]"'"'"']|$)|id_rsa|id_ed25519|\.netrc|credentials\.json)'
 READ='(^|[[:space:];&|(])(cat|less|more|head|tail|grep|rg|awk|sed|cp|scp|curl|base64|xxd|od|strings|source|python3?|node|jq|bat|nl|diff)[[:space:]]'
 
 # 1) git フックの迂回（--no-verify、core.hooksPath の変更）
 printf '%s' "$CMD" | grep -qE '(^|[[:space:]])--no-verify([[:space:]]|$)|git[[:space:]]+commit[^|;&]*[[:space:]]-[A-Za-z]*n[A-Za-z]*([[:space:]]|$)|core\.hooksPath' \
   && deny "git フックの迂回（--no-verify / core.hooksPath の変更）は Mark 本人が行う操作です（憲章 §4）。"
 # 2) 鍵ファイルの Bash 経由の読み取り（permissions の Read 拒否は Bash に効かないため）
-printf '%s' "$CMD" | grep -qE "$SECRET" && printf '%s' "$CMD" | grep -qE "$READ" \
+# .env.example だけは読んでよい（変数名だけで値が無い）。それ以外の .env 系・非公開フォルダ・鍵ファイルは Bash で読ませない
+CMD_S="$(printf '%s' "$CMD" | sed 's/\.env\.example//g')"
+printf '%s' "$CMD_S" | grep -qE "$SECRET" && printf '%s' "$CMD_S" | grep -qE "$READ" \
   && deny "鍵・資格情報らしきファイルを Bash で読もうとしています（憲章 I-4）。必要なら Mark 本人が扱います。"
 # 3) 保護ファイルへの Bash 経由の書き込み（heredoc 本文の誤検知を避けるため、先頭行と各区切りの後だけを見る）
 HEAD_PART="$(printf '%s' "$CMD" | awk 'NR==1{print; next} /^[[:space:]]*(cd|git|sed|perl|mv|cp|rm|tee|cat|python3?|node|echo|printf|chmod|ln|truncate)[[:space:]]/{print}')"

@@ -1,124 +1,306 @@
-"""tools/ の Codex ラッパーと scope_check を、偽の codex で試す（本物の Codex・ネットワークは使わない）。"""
+"""tools/ の Codex ラッパーと鍵の入力スクリプトを、偽の codex と擬似端末で試す（本物の Codex・ネットワークは使わない）。"""
 import json
 import os
+import pty
 import shutil
 import stat
 import subprocess
+import time
+import uuid
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+MARK = "/Us" + "ers/someone/secret"  # 非公開の印は実行時に組み立てる（本文に置かない）
 
 FAKE_CODEX = r"""#!/usr/bin/env bash
-# 偽の codex: FAKE_MODE で振る舞いを変える。呼ばれた回数とモデルを記録する
+# 偽の codex: FAKE_MODE で振る舞いを変える。呼ばれた引数を記録する
 echo "$*" >> "$FAKE_LOG"
 out=""; prev=""
 for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
 cat > /dev/null
+G="git -c user.email=t@t -c user.name=t -c core.hooksPath=/dev/null"
 case "$FAKE_MODE" in
-  allowed) echo "VERSION = '0.1.1'" >> orch/__init__.py ;;
+  allowed) echo "VERSION_INFO = (0, 1, 0)" >> orch/__init__.py ;;
   outside) echo "x" >> README.md ;;
-  private) printf 'P = "%s/someone/secret"\n' "/Us""ers" >> orch/__init__.py ;;
+  private) printf 'P = "%s"\n' "$FAKE_MARK" >> orch/__init__.py ;;
   envfile) echo "X=1" >> .env ;;
   fail) exit 1 ;;
+  fail_changed) echo "x = 1" >> orch/__init__.py; exit 1 ;;
   limit) echo "You've hit your usage limit. try again at 10:00" >&2; exit 1 ;;
+  limit_dirty) echo "x" >> README.md; echo "try again at 10:00" >&2; exit 1 ;;
+  ratelimit_ok) echo "VERSION_INFO = 1" >> orch/__init__.py; echo "rate limit を考慮しました" ;;
+  widen) sed -i.bak 's#orch/__init__.py#orch/__init__.py\nREADME.md#' docs/specs/s.md; rm -f docs/specs/s.md.bak; echo x >> README.md ;;
+  untracked_edit) printf '%s\n' "$FAKE_MARK" >> notes.md ;;
+  ignored) mkdir -p data && echo "import os" > data/evil.pth ;;
+  newdir) mkdir -p hidden && echo '*' > hidden/.gitignore && echo x > hidden/payload.py ;;
+  commit) echo "x" >> README.md && $G add README.md && $G commit -q -m sneaky ;;
+  rename) $G mv orch/__init__.py orch/renamed.py ;;
+  tamper) printf 'import sys\nprint("scope_check: OK")\nsys.exit(0)\n' > tools/scope_check.py; echo x >> README.md ;;
+  japanese) echo "追記" >> "docs/ルミナス メモ.md" ;;
+  glob) echo "# glob" >> orch/config.py ;;
+  pycache) mkdir -p orch/__pycache__ .pytest_cache && echo x > orch/__pycache__/evil.cpython-39.pyc && echo x > .pytest_cache/v ;;
+  opinion) echo "意見です" ;;
 esac
 [ -n "$out" ] && echo "変更しました" > "$out"
 exit 0
 """
 
+SPEC = "# s\n<!-- ALLOWED -->\norch/__init__.py\n<!-- /ALLOWED -->\n"
+
 
 def git(cwd, *args):
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
+    return subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "core.hooksPath=/dev/null", *args],
+                          cwd=cwd, capture_output=True, text=True, check=True).stdout
 
 
 @pytest.fixture
-def proj(tmp_path):
+def proj(tmp_path, monkeypatch):
     p = tmp_path / "ルミナス"
     p.mkdir()
     for d in ("tools", "orch", "scripts"):
         shutil.copytree(ROOT / d, p / d, ignore=shutil.ignore_patterns("__pycache__"))
     (p / "docs" / "specs").mkdir(parents=True)
+    (p / "docs" / "astra-packets").mkdir(parents=True)
+    shutil.copy(ROOT / "docs" / "external-allowlist.txt", p / "docs" / "external-allowlist.txt")
+    (p / "docs" / "astra-packets" / "p.md").write_text("問い: この設計の穴は？\n", encoding="utf-8")
+    (p / "docs" / "ルミナス メモ.md").write_text("メモ\n", encoding="utf-8")
     (p / "README.md").write_text("readme\n", encoding="utf-8")
-    (p / ".gitignore").write_text(".env\ndata/\nlogs/\n__pycache__/\n", encoding="utf-8")
+    (p / ".gitignore").write_text(".env\ndata/\nlogs/\n__pycache__/\nnotes.md\n", encoding="utf-8")
     (p / ".env").write_text("A=1\n", encoding="utf-8")
-    (p / "docs" / "specs" / "s.md").write_text("# s\n<!-- ALLOWED -->\norch/__init__.py\n<!-- /ALLOWED -->\n", encoding="utf-8")
+    (p / "docs" / "specs" / "s.md").write_text(SPEC, encoding="utf-8")
     git(p, "init", "-q")
-    git(p, "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A")
-    git(p, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "init")
+    git(p, "add", "-A")
+    git(p, "commit", "-q", "-m", "init")
+    (p / "notes.md").write_text("既存のメモ\n", encoding="utf-8")  # 実行前からある ignore 対象のファイル
     fake = tmp_path / "bin" / "codex"
     fake.parent.mkdir()
     fake.write_text(FAKE_CODEX, encoding="utf-8")
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
-    return p, fake, tmp_path / "fake.log"
+    cache = Path.home() / ".cache" / f"luminous-test-{uuid.uuid4().hex[:8]}"  # Codex が書けない場所（/tmp の外）
+    yield p, fake, tmp_path / "fake.log", cache
+    shutil.rmtree(cache, ignore_errors=True)
 
 
-def run_impl(proj, mode, *, extra_env=None):
-    p, fake, log = proj
-    env = dict(os.environ, CODEX_BIN=str(fake), FAKE_MODE=mode, FAKE_LOG=str(log))
+def run(proj, mode, *, script="codex_impl.sh", args=("docs/specs/s.md", "low"), extra_env=None):
+    p, fake, log, cache = proj
+    env = dict(os.environ, CODEX_BIN=str(fake), FAKE_MODE=mode, FAKE_LOG=str(log), FAKE_MARK=MARK, XDG_CACHE_HOME=str(cache))
+    env.pop("CODEX_FALLBACK_MODEL", None)
     env.update(extra_env or {})
-    return subprocess.run(["bash", "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p, env=env, capture_output=True, text=True)
+    return subprocess.run(["bash", f"tools/{script}", *args], cwd=p, env=env, capture_output=True, text=True)
 
 
-def test_allowed_change_ok(proj, isolated_env):
-    r = run_impl(proj, "allowed")
+def calls(proj):
+    return proj[2].read_text().splitlines() if proj[2].exists() else []
+
+
+# ---- 成功 ----
+def test_allowed_change_ok_and_ledger(proj, isolated_env):
+    r = run(proj, "allowed")
     assert r.returncode == 0, r.stderr
     assert "scope_check: OK" in r.stdout
     rows = [json.loads(l) for l in (isolated_env / "data" / "usage.jsonl").read_text(encoding="utf-8").splitlines()]
     assert rows[-1]["vendor"] == "codex" and rows[-1]["status"] == "ok"
-    assert "model_reasoning_effort=low" in proj[2].read_text() and "--disable memories" in proj[2].read_text()
+    assert "model_reasoning_effort=low" in calls(proj)[0] and "--disable memories" in calls(proj)[0]
+    assert "-s workspace-write" in calls(proj)[0] and "danger" not in calls(proj)[0]
+    assert not list(proj[3].glob("luminous-codex/run.*"))  # 安全な置き場は片付ける
 
 
-def test_outside_allowed_is_3(proj):
-    assert run_impl(proj, "outside").returncode == 3
+def test_rate_limit_word_in_successful_output_is_ok(proj):
+    assert run(proj, "ratelimit_ok").returncode == 0
 
 
-def test_private_marker_is_3(proj):
-    r = run_impl(proj, "private")
+def test_japanese_path_in_allowed(proj):
+    (proj[0] / "docs" / "specs" / "jp.md").write_text("<!-- ALLOWED -->\n- docs/ルミナス メモ.md\n<!-- /ALLOWED -->\n", encoding="utf-8")
+    r = run(proj, "japanese", args=("docs/specs/jp.md", "low"))
+    assert r.returncode == 0, r.stderr
+
+
+def test_glob_bullet_in_allowed(proj):
+    (proj[0] / "docs" / "specs" / "glob.md").write_text("<!-- ALLOWED -->\n- orch/*.py\n<!-- /ALLOWED -->\n", encoding="utf-8")
+    assert run(proj, "glob", args=("docs/specs/glob.md", "low")).returncode == 0
+
+
+def test_pycache_is_removed_not_flagged(proj):
+    r = run(proj, "pycache")
+    assert r.returncode == 0, r.stderr
+    assert not (proj[0] / "orch" / "__pycache__").exists() and not (proj[0] / ".pytest_cache").exists()
+
+
+# ---- 違反（3） ----
+@pytest.mark.parametrize("mode", ["outside", "private", "envfile", "widen", "untracked_edit", "ignored", "newdir", "commit", "rename", "tamper"])
+def test_violations_are_3(proj, mode):
+    r = run(proj, mode)
+    assert r.returncode == 3, (mode, r.stdout, r.stderr)
+
+
+def test_private_marker_in_allowed_untracked_file(proj):
+    (proj[0] / "docs" / "specs" / "notes.md").write_text("<!-- ALLOWED -->\nnotes.md\n<!-- /ALLOWED -->\n", encoding="utf-8")
+    r = run(proj, "untracked_edit", args=("docs/specs/notes.md", "low"))
     assert r.returncode == 3 and "非公開の印" in r.stderr
 
 
-def test_env_change_is_3(proj):
-    assert run_impl(proj, "envfile").returncode == 3
+def test_violation_takes_priority_over_limit(proj):
+    r = run(proj, "limit_dirty")
+    assert r.returncode == 3 and len(calls(proj)) == 1
 
 
+# ---- 上限・失敗・やり直し ----
 def test_usage_limit_is_4_without_retry(proj):
-    r = run_impl(proj, "limit", extra_env={"CODEX_FALLBACK_MODEL": "gpt-5.6-sol"})
-    assert r.returncode == 4 and len(proj[2].read_text().splitlines()) == 1
+    r = run(proj, "limit")
+    assert r.returncode == 4 and len(calls(proj)) == 1
 
 
-def test_fail_unchanged_retries_once_with_fallback(proj):
-    r = run_impl(proj, "fail", extra_env={"CODEX_FALLBACK_MODEL": "gpt-5.6-sol"})
-    calls = proj[2].read_text().splitlines()
-    assert r.returncode == 5 and len(calls) == 2 and "-m gpt-5.6-sol" in calls[1]
+def test_fail_unchanged_retries_with_default_fallback(proj):
+    r = run(proj, "fail")
+    c = calls(proj)
+    assert r.returncode == 5 and len(c) == 2 and "-m gpt-5.6-sol" in c[1]
 
 
-def test_stop_switch_is_2(proj):
-    p = proj[0]
-    (p / "data").mkdir(exist_ok=True)
-    (p / "data" / ".codex_disabled").touch()
-    assert run_impl(proj, "allowed").returncode == 2
+def test_fallback_can_be_disabled(proj):
+    r = run(proj, "fail", extra_env={"CODEX_FALLBACK_MODEL": ""})
+    assert r.returncode == 5 and len(calls(proj)) == 1
+
+
+def test_fail_with_changes_does_not_retry(proj):
+    r = run(proj, "fail_changed")
+    assert r.returncode == 5 and len(calls(proj)) == 1
+
+
+def test_fallback_from_dotenv(proj):
+    with open(proj[0] / ".env", "a", encoding="utf-8") as fh:
+        fh.write("CODEX_FALLBACK_MODEL=other-model\n")
+    git(proj[0], "status")  # .env は ignore 対象なので作業ツリーは汚れない
+    run(proj, "fail")
+    assert "-m other-model" in calls(proj)[1]
+
+
+# ---- 前提の誤り（2） ----
+def test_stop_switch_file(proj):
+    (proj[0] / "data").mkdir(exist_ok=True)
+    (proj[0] / "data" / ".codex_disabled").touch()
+    assert run(proj, "allowed").returncode == 2 and not calls(proj)
+
+
+def test_stop_switch_from_dotenv(proj):
+    with open(proj[0] / ".env", "a", encoding="utf-8") as fh:
+        fh.write("ORCH_CODEX=0\n")
+    assert run(proj, "allowed").returncode == 2 and not calls(proj)
 
 
 def test_dirty_tree_is_2(proj):
     (proj[0] / "README.md").write_text("dirty\n", encoding="utf-8")
-    r = run_impl(proj, "allowed")
+    r = run(proj, "allowed")
     assert r.returncode == 2 and "未コミット" in r.stderr
 
 
-def test_lock_held_is_2(proj):
-    (proj[0] / "data" / "codex_runs" / ".lock").mkdir(parents=True)
-    assert run_impl(proj, "allowed").returncode == 2
+def test_empty_allowed_is_2_before_launch(proj):
+    (proj[0] / "docs" / "specs" / "empty.md").write_text("<!-- ALLOWED -->\n<!-- /ALLOWED -->\n", encoding="utf-8")
+    assert run(proj, "allowed", args=("docs/specs/empty.md", "low")).returncode == 2 and not calls(proj)
 
 
-def test_scope_check_requires_allowed(proj):
-    p = proj[0]
-    (p / "docs" / "specs" / "bad.md").write_text("# no allowed\n", encoding="utf-8")
-    r = subprocess.run(["python3", "tools/scope_check.py", "docs/specs/bad.md"], cwd=p, capture_output=True, text=True)
+def test_live_lock_is_2(proj):
+    lock = proj[0] / "data" / "codex_runs" / ".lock"
+    lock.mkdir(parents=True)
+    (lock / "owner").write_text(f"{os.getpid()} 0\n")
+    assert run(proj, "allowed").returncode == 2
+
+
+def test_stale_lock_is_reclaimed(proj):
+    lock = proj[0] / "data" / "codex_runs" / ".lock"
+    lock.mkdir(parents=True)
+    dead = subprocess.Popen(["true"]); dead.wait()
+    (lock / "owner").write_text(f"{dead.pid} 0\n")
+    assert run(proj, "allowed").returncode == 0
+
+
+def test_scope_check_allowed_requires_block(proj, tmp_path):
+    bad = tmp_path / "bad.md"
+    bad.write_text("# no allowed\n", encoding="utf-8")
+    r = subprocess.run(["python3", str(proj[0] / "tools" / "scope_check.py"), "allowed", str(bad)], capture_output=True, text=True)
     assert r.returncode == 2
+
+
+def test_added_lines_starting_with_plus():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sc", ROOT / "tools" / "scope_check.py")
+    sc = importlib.util.module_from_spec(spec); spec.loader.exec_module(sc)
+    assert sc.added_lines("a\n", "a\n++" + MARK + "\n") == ["++" + MARK]
+
+
+# ---- 意見役 ----
+def opinion(proj, packet, mode="opinion"):
+    return run(proj, mode, script="codex_opinion.sh", args=(packet,))
+
+
+def test_opinion_ok_uses_public_export_readonly(proj):
+    r = opinion(proj, "docs/astra-packets/p.md")
+    assert r.returncode == 0, r.stderr
+    c = calls(proj)[0]
+    assert "-s read-only" in c and "luminous-public." in c
+    out = next((proj[0] / "docs" / "astra-replies").glob("*-p.md")).read_text(encoding="utf-8")
+    assert "意見です" in out
+
+
+@pytest.mark.parametrize("packet", ["README.md", "docs/astra-packets/../../README.md"])
+def test_opinion_rejects_outside_paths(proj, packet):
+    assert opinion(proj, packet).returncode == 2 and not calls(proj)
+
+
+def test_opinion_rejects_symlink(proj):
+    link = proj[0] / "docs" / "astra-packets" / "link.md"
+    link.symlink_to(proj[0] / "README.md")
+    assert opinion(proj, "docs/astra-packets/link.md").returncode == 2 and not calls(proj)
+
+
+def test_opinion_rejects_private_marker(proj):
+    (proj[0] / "docs" / "astra-packets" / "x.md").write_text(f"参照: {MARK}\n", encoding="utf-8")
+    assert opinion(proj, "docs/astra-packets/x.md").returncode == 6 and not calls(proj)
+
+
+# ---- 鍵の入力（擬似端末） ----
+def run_tty(cmd, cwd, env, text, timeout=60):
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    os.close(slave)
+    time.sleep(0.3)
+    os.write(master, text.encode())
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    finally:
+        os.close(master)
+    return proc.returncode, out.decode(), err.decode()
 
 
 def test_set_env_key_refuses_non_tty(proj):
     r = subprocess.run(["bash", "tools/set_env_key.sh", "GEMINI_API_KEY"], cwd=proj[0], input="AIzaFAKE\n", capture_output=True, text=True)
     assert r.returncode == 2 and "端末から直接" in r.stderr
+
+
+def test_set_env_key_writes_600_and_backs_up(proj, tmp_path):
+    p = proj[0]
+    (p / ".env").write_text("GEMINI_API_KEY=old" + "\n" + "ORCH_GEMINI=1\n", encoding="utf-8")  # 鍵の代入の形を本文に置かない
+    (p / ".env").chmod(0o644)
+    priv = tmp_path / "priv"
+    new = "new" + "value" + "1234567890"
+    env = dict(os.environ, LUMINOUS_PRIVATE_DIR=str(priv), ORCH_GEMINI="0", GEMINI_API_KEY="stale-shell-value")
+    rc, out, err = run_tty(["bash", "tools/set_env_key.sh", "GEMINI_API_KEY"], p, env, new + "\n")
+    assert rc == 0, err
+    text = (p / ".env").read_text(encoding="utf-8")
+    assert f"GEMINI_API_KEY={new}" in text and "GEMINI_API_KEY=old" not in text and "ORCH_GEMINI=1" in text
+    assert stat.S_IMODE((p / ".env").stat().st_mode) == 0o600
+    backups = list((priv / "env_backups").glob(".env.bak.*"))
+    assert len(backups) == 1 and "GEMINI_API_KEY=old" in backups[0].read_text(encoding="utf-8")
+    assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600 and stat.S_IMODE(priv.stat().st_mode) == 0o700
+    assert new not in out and new not in err
+
+
+def test_set_env_key_stops_if_backup_fails(proj, tmp_path):
+    p = proj[0]
+    (p / ".env").write_text("GEMINI_API_KEY=old\n", encoding="utf-8")
+    blocker = tmp_path / "priv"
+    blocker.write_text("ファイルなので mkdir できない", encoding="utf-8")
+    env = dict(os.environ, LUMINOUS_PRIVATE_DIR=str(blocker), ORCH_GEMINI="0")
+    rc, out, err = run_tty(["bash", "tools/set_env_key.sh", "GEMINI_API_KEY"], p, env, "newvalue\n")
+    assert rc == 1 and (p / ".env").read_text(encoding="utf-8") == "GEMINI_API_KEY=old\n"

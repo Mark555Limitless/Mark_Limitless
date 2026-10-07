@@ -70,7 +70,9 @@ if [ "${FABLE5_HEADLESS:-0}" != "1" ]; then
   PYBIN="$ROOT/.venv/bin/python"; [ -x "$PYBIN" ] || PYBIN="$(command -v python3)"
   if [ -n "$PYBIN" ] && [ -d "$ROOT/orch" ]; then
     echo; echo "=== 外部AIの点検（orch.health）==="
-    (cd "$ROOT" && timeout 15 "$PYBIN" -m orch.health --quiet 2>/dev/null | head -5) || true
+    TO="$(command -v timeout || command -v gtimeout || true)"   # Mac に timeout が無ければ直接実行する
+    if [ -n "$TO" ]; then (cd "$ROOT" && "$TO" 15 "$PYBIN" -m orch.health --quiet 2>/dev/null | head -5) || true
+    else (cd "$ROOT" && "$PYBIN" -m orch.health --quiet 2>/dev/null | head -5) || true; fi
   fi
 fi
 if [ -f "$ROOT/state/.session-end.log" ] && tail -n 6 "$ROOT/state/.session-end.log" | grep -q '失敗'; then

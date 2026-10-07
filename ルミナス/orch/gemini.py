@@ -44,10 +44,19 @@ def _prices() -> Tuple[float, float]:
     return config.env_float("ORCH_GEMINI_PRICE_IN", 0.75), config.env_float("ORCH_GEMINI_PRICE_OUT", 3.75)
 
 
+def _int(x: Any) -> int:
+    if isinstance(x, bool):
+        return 0
+    try:
+        return int(x or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def cost_from_usage(md: Dict[str, Any]) -> float:
     p_in, p_out = _prices()
-    prompt = int(md.get("promptTokenCount") or 0)
-    out = int(md.get("candidatesTokenCount") or 0) + int(md.get("thoughtsTokenCount") or 0)
+    prompt = _int(md.get("promptTokenCount"))
+    out = _int(md.get("candidatesTokenCount")) + _int(md.get("thoughtsTokenCount"))
     return (prompt * p_in + out * p_out) / 1_000_000
 
 
@@ -89,28 +98,57 @@ def _thinking_rejected(resp: requests.Response) -> bool:
 
 
 def _log(model: str, res: Result, sec: float, usd: float, purpose: str) -> None:
-    md = res.usage or {}
-    line = (
-        f"{config.ts()}\tmodel={model}\trc={res.rc}\tsec={sec:.1f}\tchars={len(res.text)}"
-        f"\tin={md.get('promptTokenCount', 0)}\tout={md.get('candidatesTokenCount', 0)}"
-        f"\tthink={md.get('thoughtsTokenCount', 0)}\tusd={usd:.6f}\treason={res.reason}"
-    )
-    path = config.log_dir() / "gemini.log"
-    with config.file_lock(path.with_suffix(".lock")):
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(config.redact(line) + "\n")
+    """1回1行。本文・生のエラー・鍵は書かない。記録の失敗で本流を止めない。"""
+    md = res.usage if isinstance(res.usage, dict) else {}
+    tin = _int(md.get("promptTokenCount"))
+    tout = _int(md.get("candidatesTokenCount"))
+    think = _int(md.get("thoughtsTokenCount"))
+    try:
+        line = (
+            f"{config.ts()}\tmodel={model}\trc={res.rc}\tsec={sec:.1f}\tchars={len(res.text)}"
+            f"\tin={tin}\tout={tout}\tthink={think}\tusd={usd:.6f}\treason={res.reason}"
+        )
+        path = config.log_dir() / "gemini.log"
+        with config.file_lock(path.with_suffix(".lock")):
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(config.redact(line) + "\n")
+    except OSError:
+        pass
     status = "ok" if res.rc == 0 else ("skip" if res.reason in ("停止中", "上限到達", "鍵なし") else "error")
-    usage.record(
-        "gemini",
-        model=model,
-        purpose=purpose,
-        calls=0 if status == "skip" else 1,
-        in_tokens=int(md.get("promptTokenCount") or 0),
-        out_tokens=int(md.get("candidatesTokenCount") or 0) + int(md.get("thoughtsTokenCount") or 0),
-        usd=usd,
-        status=status,
-        ms=int(sec * 1000),
-    )
+    try:
+        usage.record("gemini", model=model, purpose=purpose, calls=0 if status == "skip" else 1,
+                     in_tokens=tin, out_tokens=tout + think, usd=usd, status=status, ms=int(sec * 1000))
+    except OSError:
+        pass
+
+
+def _parse(data: Any) -> Tuple[Result, float]:
+    """応答を解析する。形が崩れていても例外を出さず rc=3 にする。"""
+    if not isinstance(data, dict):
+        return Result(3, "解析失敗"), UNKNOWN_USAGE_USD
+    md = data.get("usageMetadata")
+    md = md if isinstance(md, dict) else {}
+    known = any(isinstance(md.get(k), int) and not isinstance(md.get(k), bool)
+                for k in ("promptTokenCount", "candidatesTokenCount", "thoughtsTokenCount"))
+    usd = cost_from_usage(md) if known else UNKNOWN_USAGE_USD  # 使用量が読めないときは控えめに計上
+    pf = data.get("promptFeedback")
+    if isinstance(pf, dict) and pf.get("blockReason"):
+        return Result(3, "安全フィルタ", usage=md), usd
+    cands = data.get("candidates")
+    if not isinstance(cands, list) or not cands:
+        return Result(3, "空応答", usage=md), usd
+    cand = cands[0]
+    if not isinstance(cand, dict):
+        return Result(3, "解析失敗", usage=md), usd
+    content = cand.get("content")
+    parts = content.get("parts") if isinstance(content, dict) else None
+    parts = parts if isinstance(parts, list) else []
+    text = "".join(p["text"] for p in parts
+                   if isinstance(p, dict) and not p.get("thought") and isinstance(p.get("text"), str))
+    if not text.strip():
+        reason = "安全フィルタ" if cand.get("finishReason") in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST") else "空応答"
+        return Result(3, reason, usage=md), usd
+    return Result(0, "ok", text=text, usage=md), usd
 
 
 def generate(
@@ -151,14 +189,15 @@ def generate(
             resp = _post_with_timeout(url, headers, body, timeout)
     except TimeoutError:
         return finish(Result(2, "タイムアウト"), UNKNOWN_USAGE_USD)
-    except requests.RequestException:
+    except Exception:  # noqa: BLE001 通信の例外はすべて基盤の失敗（生のエラーは記録しない）
         return finish(Result(2, "通信失敗"), UNKNOWN_USAGE_USD)
 
-    code = resp.status_code
+    code = getattr(resp, "status_code", 0)
+    text = getattr(resp, "text", "") or ""
     # 4xx は処理前に拒否されたと分かるので計上しない。5xx は処理されたか不明なので控えめに計上する
     if code in (401, 403):
         return finish(Result(2, "未認証"))
-    if code == 429 or "RESOURCE_EXHAUSTED" in (resp.text or ""):
+    if code == 429 or (code != 200 and "RESOURCE_EXHAUSTED" in text):
         return finish(Result(2, "上限到達(429)"))
     if code >= 500:
         return finish(Result(2, "API障害"), UNKNOWN_USAGE_USD)
@@ -166,23 +205,13 @@ def generate(
         return finish(Result(2, f"API障害(HTTP {code})"))
     try:
         data = resp.json()
-    except ValueError:
+    except Exception:  # noqa: BLE001 JSON でない応答
         return finish(Result(3, "解析失敗"), UNKNOWN_USAGE_USD)
-
-    md = data.get("usageMetadata") or {}
-    usd = cost_from_usage(md) if md else UNKNOWN_USAGE_USD
-    if (data.get("promptFeedback") or {}).get("blockReason"):
-        return finish(Result(3, "安全フィルタ", usage=md), usd)
-    cands = data.get("candidates") or []
-    if not cands:
-        return finish(Result(3, "空応答", usage=md), usd)
-    cand = cands[0]
-    parts = ((cand.get("content") or {}).get("parts")) or []
-    text = "".join(p.get("text", "") for p in parts if isinstance(p, dict) and not p.get("thought"))
-    if not text.strip():
-        reason = "安全フィルタ" if cand.get("finishReason") in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST") else "空応答"
-        return finish(Result(3, reason, usage=md), usd)
-    return finish(Result(0, "ok", text=text, usage=md), usd)
+    try:
+        res, usd = _parse(data)
+    except Exception:  # noqa: BLE001 想定外の形でも本流を止めない
+        res, usd = Result(3, "解析失敗"), UNKNOWN_USAGE_USD
+    return finish(res, usd)
 
 
 def check_status(*, net: bool = True, net_timeout: float = 20) -> Tuple[bool, str]:

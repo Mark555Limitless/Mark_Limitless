@@ -50,7 +50,9 @@
       "Read(**/credentials.json)",
       "Read(**/.netrc)",
       "Read(/data/**/.env*)",
-      "Edit(/.env)"
+      "Edit(/.env)",
+      "Read(//**/ルミナス_非公開/**)",
+      "Read(//**/env_backups/**)"
     ]
   },
   "hooks": {
