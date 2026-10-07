@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Jev（TypeSafe AI）を Verifier のゲートとして呼ぶ薄いアダプタ。【実験・未検証: 公式ドキュメント本文未読。Mark の目視と併用し単独運用しない】
+"""Jev（TypeSafe AI）を Verifier のゲートとして呼ぶ薄いアダプタ。【実験・未検証: 公式ドキュメント本文未読。Jev は「止める」信号にだけ使い、通す根拠や改善の採点には使わない（docs/eval-design.md）。終了コードが 0 以外なら「保留」として扱う】
 
 Jev は文章を生成せず、型付きの判定だけを返す（公開情報: Noul=はい/いいえの確率、Choice=選択肢と確率・信頼度、
 Score=2〜10 段階の採点と確率・信頼度）。本スクリプトは「state（判定対象）＋質問」を送り、判定と閾値の結論を
@@ -39,8 +39,18 @@ def main() -> int:
     ap.add_argument("--questions", required=True, help="質問定義 JSON")
     ap.add_argument("--threshold", type=float, default=0.6, help="noul の『はい』とみなす確率の閾値")
     ap.add_argument("--dry-run", action="store_true", help="送信せずリクエストを表示（鍵は不要）")
+    ap.add_argument("--public-ok", action="store_true", help="判定対象が docs/external-allowlist.txt の外でも、公開予定の文書だと Mark が確認済み")
     a = ap.parse_args()
 
+    # 外部に送ってよいのは「公開可」の文書だけ（VIRTUAL_MARK §6）。allowlist の外なら --public-ok が要る
+    allow = [l.strip() for l in (ROOT / "docs" / "external-allowlist.txt").read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")]
+    try:
+        rel = Path(a.state_file).resolve().relative_to(ROOT).as_posix()
+    except ValueError:
+        rel = None
+    if not a.public_ok and not (rel and any(rel == p or rel.startswith(p.rstrip("/") + "/") for p in allow)):
+        print("判定対象が公開可の範囲（docs/external-allowlist.txt）の外です。公開予定の文書なら --public-ok を付けてください。", file=sys.stderr)
+        return 8
     state = Path(a.state_file).read_text(encoding="utf-8")
     # 送信前に秘匿情報を検査（憲章 I-4）。第三者へ渡す文書なので鍵らしき文字列があれば中止
     import subprocess

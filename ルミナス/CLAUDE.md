@@ -38,7 +38,9 @@
 - パスワード・APIキー・トークンは、ファイル・コミット・会話ログに**絶対に残さない**
 - ログインが必要なときは Mark 本人が画面で操作する。エージェントは資格情報を受け取らない
 - `scripts/secret-scan.sh` が共通の検査器。PreToolUse hook（早期警告）と git の pre-commit / pre-push（本命。`scripts/setup.sh` で有効化）が使う。止まったら内容を確認し、ファイルから除去する
-- `printenv`・`env` の実行と `.env`・`settings.local.json` の読取は permissions で deny。鍵は各ラッパースクリプトが環境から読み、会話には出さない
+- `printenv`・`env` の実行と `.env`・`settings.local.json` の読取は permissions で deny。Bash 経由の読み取りは `guard-protected.sh` が止める。鍵は各ラッパースクリプトが環境から読み、会話には出さない
+- 保護ファイルを変えるときは Edit ツールを使う（確認が出る）。Bash の `sed -i`・リダイレクト・python 等での書き換えは `guard-protected.sh` が止める
+- 外部AIは `scripts/export-public.sh` の使い捨てディレクトリ（公開可・push 済みのファイルだけ）で起動する。統治ルールの強化案は `docs/proposals/` にあり、Mark の承認までは未適用
 
 ## 事実の扱い
 - 出典の信頼度: ①一次情報 ②査読論文・第三者評価 ③技術メディア・通信社 ④個人SNS・GitHub Issue ⑤動画・個人ブログ

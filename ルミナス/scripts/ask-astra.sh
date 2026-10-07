@@ -12,6 +12,7 @@ CODEX="${CODEX_BIN:-codex}"
 SANDBOX="${ASTRA_SANDBOX:-read-only}"
 OUT="$ROOT/docs/astra-replies/$(date +%Y%m%d)-$NAME.md"
 
+case "${PACKET#"$ROOT"/}" in docs/astra-packets/*|./docs/astra-packets/*) ;; *) echo "パケットは docs/astra-packets/ に置いてください（公開可の範囲だけを外部に送るため。VIRTUAL_MARK §6）" >&2; exit 2;; esac
 command -v "$CODEX" >/dev/null 2>&1 || { echo "codex が見つかりません。npm i -g @openai/codex でインストールするか CODEX_BIN を指定してください。" >&2; exit 3; }
 if ! "$CODEX" login status >/dev/null 2>&1; then
   if [ -n "${OPENAI_API_KEY:-}" ]; then
@@ -40,9 +41,14 @@ mkdir -p "$(dirname "$OUT")"
 # 注: codex exec がカスタムエージェント TOML を名前で読むかは公式文書で未確認のため、役割は文面でも指定する。
 # 注: 送る前に秘匿情報が混ざっていないか検査する（憲章 I-4）
 bash "$ROOT/scripts/secret-scan.sh" --quiet < "$PACKET" || { echo "パケットに鍵らしき文字列があるため送信を中止しました。" >&2; exit 6; }
-if ! "$CODEX" exec -C "$ROOT" -s "$SANDBOX" -m "$MODEL" \
+# 外部AIには「公開可・push 済み」のファイルだけを書き出した使い捨てディレクトリを見せる（VIRTUAL_MARK §6）
+PUB="$(bash "$ROOT/scripts/export-public.sh")" || { echo "公開用ディレクトリを作れませんでした。" >&2; exit 7; }
+RC=0
+"$CODEX" exec -C "$PUB" --skip-git-repo-check -s "$SANDBOX" -m "$MODEL" \
      "あなたは .codex/agents/astra-architect.toml の役割（第二意見・反証役）です。AGENTS.md と CHARTER.md を読んでから、stdin のパケットに日本語で答えてください。" \
-     < "$PACKET" >> "$OUT" 2> "$OUT.err"; then
+     < "$PACKET" >> "$OUT" 2> "$OUT.err" || RC=$?
+bash "$ROOT/scripts/cleanup-public.sh" "$PUB" 2>/dev/null || true
+if [ "$RC" != 0 ]; then
   echo "codex exec が失敗しました。$OUT.err を確認してください（モデル名が無効なら ASTRA_MODEL を変更）。" >&2
   exit 5
 fi

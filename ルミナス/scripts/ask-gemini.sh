@@ -9,6 +9,7 @@ PACKET="${1:-}"
 NAME="${2:-$(basename "$PACKET" .md)}"
 GEMINI="${GEMINI_BIN:-gemini}"
 OUT="$ROOT/docs/gemini-replies/$(date +%Y%m%d)-$NAME.md"
+case "${PACKET#"$ROOT"/}" in docs/gemini-packets/*|./docs/gemini-packets/*) ;; *) echo "パケットは docs/gemini-packets/ に置いてください（公開可の範囲だけを外部に送るため。VIRTUAL_MARK §6）" >&2; exit 2;; esac
 command -v "$GEMINI" >/dev/null 2>&1 || { echo "gemini が見つかりません。npm i -g @google/gemini-cli でインストールするか GEMINI_BIN を指定してください。" >&2; exit 3; }
 if [ -z "${GEMINI_API_KEY:-}" ] && [ ! -d "$HOME/.gemini" ]; then
   echo "GEMINI_API_KEY が未設定で、Google ログインの記録もありません。鍵は環境変数で渡してください（チャットやファイルに貼らない）。" >&2
@@ -26,7 +27,12 @@ bash "$ROOT/scripts/secret-scan.sh" --quiet < "$PACKET" || { echo "パケット�
 # 注: Gemini CLI の承認モード・サンドボックスの指定フラグは公式文書で要確認。読み取り専用で使う運用（ファイル変更は司令塔が行う）
 ARGS=(-p "あなたはルミナス（Luminous）のサポートAI（調査・クロスベンダー検証役）です。AGENTS.md と CHARTER.md を読んでから、stdin のパケットに日本語で、出典と信頼度を添えて答えてください。推測は「推測」と書き、鍵やパスワードは出力しないこと。")
 [ -n "${GEMINI_MODEL:-}" ] && ARGS+=(-m "$GEMINI_MODEL")
-if ! (cd "$ROOT" && "$GEMINI" "${ARGS[@]}" < "$PACKET") >> "$OUT" 2> "$OUT.err"; then
+# 外部AIには「公開可・push 済み」のファイルだけを書き出した使い捨てディレクトリを見せる（VIRTUAL_MARK §6）
+PUB="$(bash "$ROOT/scripts/export-public.sh")" || { echo "公開用ディレクトリを作れませんでした。" >&2; exit 7; }
+RC=0
+(cd "$PUB" && "$GEMINI" "${ARGS[@]}" < "$PACKET") >> "$OUT" 2> "$OUT.err" || RC=$?
+bash "$ROOT/scripts/cleanup-public.sh" "$PUB" 2>/dev/null || true
+if [ "$RC" != 0 ]; then
   echo "gemini が失敗しました。$OUT.err を確認してください。" >&2; exit 5
 fi
 rm -f "$OUT.err"; echo "保存: ${OUT#"$ROOT"/}"

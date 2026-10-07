@@ -9,7 +9,29 @@
       "Edit(/.claude/**)",
       "Edit(/.codex/**)",
       "Edit(/.githooks/**)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Edit(/prompts/ルミナス_最終プロンプト.md)",
+      "Edit(/scripts/secret-scan.sh)",
+      "Edit(/scripts/sync-obsidian.sh)",
+      "Edit(/scripts/build-final-prompt-docx.mjs)",
+      "Edit(/package.json)",
+      "Edit(/package-lock.json)",
+      "Edit(/.mcp.json)",
+      "mcp__github__push_files",
+      "mcp__github__create_or_update_file",
+      "mcp__github__delete_file",
+      "mcp__github__create_pull_request",
+      "mcp__github__merge_pull_request",
+      "mcp__github__create_repository",
+      "mcp__Google_Drive__share_file",
+      "mcp__Google_Drive__create_file",
+      "mcp__Google_Drive__update_file",
+      "mcp__Google_Drive__trash_file",
+      "mcp__Slack__slack_send_message",
+      "mcp__Slack__slack_schedule_message",
+      "mcp__Gmail__create_draft",
+      "mcp__Notion__notion-create-pages",
+      "mcp__Notion__notion-update-page"
     ],
     "deny": [
       "Bash(printenv *)",
@@ -19,30 +41,80 @@
       "Read(/.claude/settings.local.json)",
       "Read(**/*.pem)",
       "Read(**/*.p8)",
-      "Read(**/*.key)"
+      "Read(**/*.key)",
+      "Read(**/*.p12)",
+      "Read(**/credentials.json)",
+      "Read(**/.netrc)"
     ]
   },
   "hooks": {
     "SessionStart": [
-      { "matcher": "startup|resume|clear|compact|fork",
-        "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/restore-charter.sh\"" } ] }
+      {
+        "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/restore-charter.sh\""
+          }
+        ]
+      }
     ],
     "PreToolUse": [
-      { "matcher": "Bash",
-        "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-secrets.sh\"" } ] }
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-protected.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-secrets.sh\""
+          }
+        ]
+      }
     ],
     "PostToolUse": [
-      { "matcher": "Edit|Write|NotebookEdit",
-        "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/mark-edited.sh\"" } ] }
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/mark-edited.sh\""
+          }
+        ]
+      }
     ],
     "PostModelSwitch": [
-      { "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/log-model-switch.sh\"" } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/log-model-switch.sh\""
+          }
+        ]
+      }
     ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-gate.sh\"" } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-gate.sh\""
+          }
+        ]
+      }
     ],
     "SessionEnd": [
-      { "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-end.sh\"", "timeout": 30 } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-end.sh\"",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   }
 }

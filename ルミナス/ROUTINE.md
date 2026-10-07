@@ -56,13 +56,14 @@
 | イベント | スクリプト | 役割 |
 |---|---|---|
 | SessionStart (startup/resume/clear/compact/fork) | `.claude/hooks/restore-charter.sh` | 憲章 §1-2-4・ROUTINE §1・latest.md・最新 digest・Obsidian「最新」・最終プロンプト冒頭を注入（過去の記録は「データ」と明示）。保護ファイルの未承認差分を警告。開始時刻を `state/.sessions/<id>.start` に記録 |
+| PreToolUse (Bash) | `.claude/hooks/guard-protected.sh` | 保護ファイルへの Bash 書き込み、鍵ファイルの Bash 読み取り、`--no-verify`・`core.hooksPath` の変更を止める |
 | PreToolUse (Bash) | `.claude/hooks/guard-secrets.sh` | `git commit` / `git push` を含むコマンドの前に、作業ツリー・ステージ・未追跡ファイルを `scripts/secret-scan.sh` で検査してブロック（早期警告） |
 | git pre-commit / pre-push | `.githooks/pre-commit`, `.githooks/pre-push` | 実際にコミット・送出される差分を検査（本命）。`scripts/setup.sh` で `core.hooksPath` を設定 |
 | PostToolUse (Edit/Write) | `.claude/hooks/mark-edited.sh` | このセッションで編集があったことを記録（`LUMINOUS_GATE_MODE=edits` 用） |
 | PostModelSwitch | `.claude/hooks/log-model-switch.sh` | モデル切替を `state/escalations.log` に機械記入 |
 | Stop | `.claude/hooks/stop-gate.sh` | 今日（Asia/Tokyo）の digest・latest.md・Obsidian ハブが、このセッションの開始後に更新されていなければ停止をブロック |
 | SessionEnd | `.claude/hooks/session-end.sh`（timeout 30 秒） | Obsidian 同期・docx 再生成。失敗は `state/.session-end.log` に残し、次回 SessionStart で警告 |
-| permissions | `.claude/settings.json` | 保護ファイルの編集と `git push` は ask。`printenv`/`env`、`.env`・`settings.local.json`・鍵ファイルの読取は deny |
+| permissions | `.claude/settings.json` | 保護ファイル（最終プロンプト・hooks が呼ぶ scripts・package*.json・.mcp.json を含む）の編集、`git push`、MCP の書き込み・送信・共有系は ask。`printenv`/`env`、`.env`・`settings.local.json`・鍵ファイルの読取は deny |
 
 - 環境変数: `LUMINOUS_OBSIDIAN_DIR`（vault の絶対パス）、`LUMINOUS_TZ`（既定 Asia/Tokyo）、`LUMINOUS_GATE_MODE`（always｜edits）、`LUMINOUS_STOP_GATE`（on｜off）。Mac では `.claude/settings.local.json` の `env`（例: `.claude/settings.local.json.example`）かシェルで設定。**クラウドセッションは `settings.local.json` を読まない**ので、環境側の環境変数に設定する。鍵はここに書かない
 - ゲートを一時的に外す必要があるとき（緊急時）は `LUMINOUS_STOP_GATE=off` を設定し、**今日の digest に「STOP_GATE=off: 理由」を書く**（書かないと解除されない）

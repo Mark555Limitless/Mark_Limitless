@@ -1,0 +1,25 @@
+# 外部AI（Codex・Gemini・Jev 等）に読ませてよい「公開可」のパス（このフォルダからの相対パス）。
+# scripts/export-public.sh が、push 済みのコミット（無ければ HEAD）からこれだけを使い捨てディレクトリに書き出す。
+# 入れないもの: state/（作業記録）、digest/、obsidian/（私的文脈を含みうる）、docs/*-replies/（他AIの回答）、鍵・ローカル設定
+README.md
+CHARTER.md
+VIRTUAL_MARK.md
+ROUTINE.md
+AGENTS.md
+CLAUDE.md
+docs/research-sources.md
+docs/support-ai.md
+docs/roadmap.md
+docs/eval-design.md
+docs/astra-consultation.md
+docs/astra-packets
+docs/gemini-packets
+docs/jev-questions
+docs/proposals
+prompts
+scripts
+.codex
+.githooks
+.claude/settings.json
+.claude/hooks
+.claude/agents

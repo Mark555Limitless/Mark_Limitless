@@ -59,3 +59,22 @@
 
 Sakana Fugu と GPT-6 Astra の優位性主張は、いずれも開発元の自己申告であり、本調査時点で独立第三者（Artificial Analysis・LMArena・HELM 等）の数値は確認できていない。
 採用判断は、ルミナス自身の評価セットでの実測に基づいて行う。
+
+## 6. 検証台帳（未検証の外部事実）
+
+本文中の事実にはラベルを付ける: 〔一次確認 日付〕〔二次のみ〕〔未確認〕〔自己申告〕。未確認の事実に頼る処理は、失敗したら止まる側に倒す。
+確認の優先順位は「設計への依存度 × 外れたときの損害 × 確認の手軽さ」で決めた（上位審査 2026-10-07）。
+
+| 優先 | 主張 | ラベル | 依存箇所 | 確認方法 | 確認日 |
+|---|---|---|---|---|---|
+| 1 | `codex exec` のオプション（`-C`・`-s read-only`・`--skip-git-repo-check`・`-m`）と、read-only での読み取り範囲 | オプションは〔一次確認 2026-10-07〕（codex-cli 0.161.0 の `--help`）。読み取り範囲は〔未確認〕 | scripts/ask-astra.sh | Mac で `codex exec --help`、read-only で ROOT 外のファイルを読めるか実験 | |
+| 2 | Gemini CLI の非対話実行の承認モード・サンドボックス指定 | 〔二次のみ〕（README の `-p`・`-m` は確認、承認モードは未確認） | scripts/ask-gemini.sh | `gemini --help` | |
+| 3a | Claude Code の PostModelSwitch hook | イベントの存在は〔一次確認 2026-10-07〕（hooks 公式文書の一覧）。入力の `from_model`/`to_model` は〔未確認〕 | .claude/hooks/log-model-switch.sh | 実際に `/model` を切り替えて escalations.log を確認 | |
+| 3b | `Edit(/CHARTER.md)` の ask が実際に確認を出すか。リダイレクトは Edit 規則の対象、`sed -i` は対象外 | リダイレクトの扱いは〔一次確認 2026-10-07〕（permissions 公式文書）。実地は〔未確認〕 | .claude/settings.json、guard-protected.sh | このフォルダで起動し CHARTER.md を Edit してみる | |
+| 3c | bypass・auto モードで ask と PreToolUse hook がどう動くか | 〔未確認〕 | 統治全体 | 実地テスト 1 回 | |
+| 4 | Jev の API（`/v1/systemone`、OpenRouter `/api/alpha/decisions`）・認証・価格・データ条項 | 〔二次のみ〕（コミュニティの実例と SDK README）。価格は〔自己申告〕 | scripts/jev_gate.py | `--dry-run` の後、公開文書 1 件で疎通 | |
+| 5 | GPT-6 Astra／Sol のモデル ID と Mark のプランでの可否。TOML のエージェントを `codex exec` から名前で呼べるか | 〔二次のみ〕 | ask-astra.sh、.codex/agents | Mac の Codex で確認 | |
+| 6 | Sakana の TRINITY／Conductor／Fugu の記述 | 〔二次のみ〕（Fugu README は一次確認） | README §3・§10（着想のみ） | Phase 3 で論文本文 | |
+
+この台帳は四半期の見直し（ROUTINE §4）で更新する。
+

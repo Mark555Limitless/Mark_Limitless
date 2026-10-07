@@ -18,14 +18,27 @@ else
 fi
 
 # 保護ファイル（憲章・権限・hooks）に未コミットの差分があれば最初に警告する（自己改変の検知）
-PROTECTED="CHARTER.md VIRTUAL_MARK.md ROUTINE.md CLAUDE.md AGENTS.md .claude .codex .githooks"
+PROTECTED="CHARTER.md VIRTUAL_MARK.md ROUTINE.md CLAUDE.md AGENTS.md prompts/ルミナス_最終プロンプト.md .claude .codex .githooks .mcp.json scripts/secret-scan.sh scripts/sync-obsidian.sh scripts/build-final-prompt-docx.mjs package.json package-lock.json"
 if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   if ! git -C "$ROOT" diff --quiet HEAD -- $PROTECTED 2>/dev/null || [ -n "$(git -C "$ROOT" ls-files --others --exclude-standard -- $PROTECTED 2>/dev/null)" ]; then
     echo
     echo "!!! 注意: 憲章・権限・hooks・自走範囲に未コミットの差分があります。Mark の承認済みか確認し、未承認なら元に戻すこと（憲章 §4）。"
     git -C "$ROOT" status --short -- $PROTECTED 2>/dev/null | head -10 | sed 's/^/    /'
   fi
+  # Mark の承認タグ（luminous-approved-*）以降に保護ファイルがコミットで変わっていれば表示（コミット済みの改ざんの検知）
+  TAG="$(git -C "$ROOT" tag -l 'luminous-approved-*' --sort=-creatordate 2>/dev/null | head -n 1)"
+  if [ -n "$TAG" ]; then
+    git -C "$ROOT" verify-tag "$TAG" >/dev/null 2>&1 || echo "!!! 承認タグ $TAG の署名を検証できません（未署名か鍵が無い）。Mark に確認すること。"
+    CHG="$(git -C "$ROOT" diff --stat "$TAG" HEAD -- $PROTECTED 2>/dev/null | tail -n 1)"
+    [ -n "$CHG" ] && echo "!!! 承認タグ $TAG 以降に保護ファイルがコミットで変更されています（$CHG）。Mark の承認を確認すること。"
+  else
+    echo "（承認タグ luminous-approved-* はまだありません。憲章が Mark に承認されたら Mark が付ける）"
+  fi
 fi
+
+echo
+echo "=== VIRTUAL_MARK §3 止まって確認する範囲 ==="
+[ -f "$ROOT/VIRTUAL_MARK.md" ] && awk '/^## 3\./ {p=1; next} /^## 4\./ {p=0} p && /^(- |\*\*)/ {print}' "$ROOT/VIRTUAL_MARK.md" | hook_trunc 160
 
 echo
 echo "=== ROUTINE §1 開始時チェックリスト ==="
