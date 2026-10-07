@@ -1,0 +1,6 @@
+{
+  "env": {
+    "LUMINOUS_OBSIDIAN_DIR": "/path/to/your/Obsidian/Vault",
+    "LUMINOUS_STOP_GATE": "on"
+  }
+}

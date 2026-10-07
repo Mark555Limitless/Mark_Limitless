@@ -1,0 +1,14 @@
+{
+  "name": "luminous",
+  "private": true,
+  "version": "0.1.0",
+  "description": "ルミナス（Luminous）— 運用文書と hooks。docx 生成に docx(npm) を使う",
+  "type": "module",
+  "scripts": {
+    "build:prompt-docx": "node scripts/build-final-prompt-docx.mjs",
+    "sync:obsidian": "bash scripts/sync-obsidian.sh"
+  },
+  "dependencies": {
+    "docx": "^9.0.0"
+  }
+}

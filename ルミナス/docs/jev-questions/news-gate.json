@@ -1,0 +1,6 @@
+{
+  "source_tier": {"type": "choice", "instructions": "この記事の主たる出典の信頼度は？", "criteria": {"tier1": "一次情報（開発企業・研究グループの公式発表、論文著者本人）", "tier2": "査読論文・AIトップ会議・第三者評価機関", "tier3": "技術メディア・通信社", "tier4": "研究者個人のSNS・GitHub Issue・Reddit・Hacker News", "tier5": "YouTube・個人ブログ"}},
+  "self_reported": {"type": "noul", "instructions": "性能・優位性の主張は発表元の自己申告のみで、独立した第三者の裏付けが無いか？"},
+  "go_nogo": {"type": "score", "instructions": "このまま公開してよい度合い", "criteria": ["公開不可: 出典不明か数値・結論に矛盾がある", "保留: 一次情報での裏取りが必要", "条件付き: 自己申告と明記すれば公開可", "公開可: 一次情報で確認済み"]},
+  "escalate": {"type": "noul", "instructions": "判断に重大な矛盾・裏付けの薄い極端な主張が含まれ、上位モデルによる深掘り裁定が必要か？"}
+}

@@ -1,0 +1,23 @@
+# 秘匿情報・ローカル設定（憲章 I-4）
+.env
+.env.*
+*.key
+*.pem
+*.p8
+*.p12
+secrets/
+.claude/settings.local.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# ルミナスの一時ファイル・依存
+node_modules/
+state/.session-start
+state/.session-end.log
+
+# Jev の判定ログ（JSON）
+state/jev/
+__pycache__/
+*.pyc

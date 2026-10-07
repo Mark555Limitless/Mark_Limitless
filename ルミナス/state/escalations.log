@@ -1,0 +1,2 @@
+# date_time | task | from_model | to_model | reason | result
+2026-10-07T17:30Z | 構想書v0.1レビュー | claude-sonnet-5-5 | - | 文書レビューはSonnetで十分と判断（Mark指示[1]: 最安十分） | 審査中。上位審査が必要な論点が出れば Opus へ
