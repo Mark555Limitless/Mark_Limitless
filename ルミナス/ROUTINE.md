@@ -61,7 +61,7 @@
 | PreToolUse (Bash) | `.claude/hooks/guard-secrets.sh` | `git commit` / `git push` を含むコマンドの前に、作業ツリー・ステージ・未追跡ファイルを `scripts/secret-scan.sh` で検査してブロック（早期警告） |
 | git pre-commit / pre-push | `.githooks/pre-commit`, `.githooks/pre-push` | 実際にコミット・送出される差分を検査（本命）。`scripts/setup.sh` で `core.hooksPath` を設定 |
 | PostToolUse (Edit/Write) | `.claude/hooks/mark-edited.sh` | このセッションで編集があったことを記録（`LUMINOUS_GATE_MODE=edits` 用） |
-| PostModelSwitch | `.claude/hooks/log-model-switch.sh` | モデル切替を `state/escalations.log` に機械記入 |
+| PostModelSwitch | `.claude/hooks/log-model-switch.sh` | モデル切替を `state/escalations.log` に機械記入。Codex の実行中は `state/.sessions/escalations.pending` に保留し、次の切替か SessionEnd で移す |
 | Stop | `.claude/hooks/stop-gate.sh` | 今日（Asia/Tokyo）の digest・HANDOVER.md・Obsidian ハブが、このセッションの開始後に更新されていなければ終了をブロック。無人実行（`FABLE5_HEADLESS=1`）では止めない |
 | SessionStart（同上の中） | `python3 -m orch.health --quiet` | 外部AI（Codex・Gemini・Jev）の点検を 3 行で表示。無人実行では出さない |
 | SessionEnd | `.claude/hooks/session-end.sh`（timeout 30 秒） | Obsidian 同期・docx 再生成。失敗は `state/.session-end.log` に残し、次回 SessionStart で警告 |

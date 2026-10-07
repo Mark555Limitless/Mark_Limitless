@@ -9,10 +9,20 @@
 #             4=利用枠の上限（待つ。途中の差分に重ねて再実行しない）/ 5=Codex の失敗 / 130=中断（INT・TERM・HUP。検査と片付けは行う）
 # 検査器（scope_check.py の写し）・指示書の写し・実行前の記録は Codex が書けない場所に置き、作業領域の外の python3 を -I -S で使う。
 # Codex の実行後は、入れ子の .git を隔離し、本物の .git の設定・hooks が変わっていないことを確かめるまで git を1回も実行しない。
+# Codex は独自のプロセスグループで動かし、終了後にグループごと止め、待ち時間（LUMINOUS_SETTLE_S、既定 2 秒）を置いてから検査し、
+# 片付けの後にもう一度待って比べ直す（グループから抜け出したプロセスの遅れた書き込みを検出する。完全ではない: docs/support-ai.md §10）。
 # 本体は関数に入れてある（bash は関数全体を読んでから実行するので、実行中にこのファイルを書き換えられても影響しない）。
 LUM_SAFE=""; LUM_CPID=""; LUM_INTERRUPTED=0; LUM_GITDIR=""; LUM_TOPLEVEL=""
 on_exit() { [ -n "$LUM_SAFE" ] && remove_safe_dir "$LUM_SAFE"; release_lock; }
-on_signal() { LUM_INTERRUPTED=1; [ -n "$LUM_CPID" ] && kill -TERM "$LUM_CPID" 2>/dev/null; return 0; }
+on_signal() { LUM_INTERRUPTED=1; [ -n "$LUM_CPID" ] && { kill -TERM -- "-$LUM_CPID" 2>/dev/null || kill -TERM "$LUM_CPID" 2>/dev/null; }; return 0; }
+# Codex は独自のプロセスグループで起動し、終わったらグループごと止める（裏に残したプロセスが検査の後に書き込むのを防ぐ）
+stop_group() { # $1=グループの番号（= Codex の PID）
+  kill -0 -- "-$1" 2>/dev/null || return 0
+  kill -TERM -- "-$1" 2>/dev/null; sleep 1
+  kill -KILL -- "-$1" 2>/dev/null
+  echo "codex_impl: Codex の終了後も残っていたプロセスを止めました" >&2
+  return 0
+}
 
 main() {
   set -u
@@ -58,10 +68,12 @@ main() {
   run_codex() { # $1=モデル（空なら ~/.codex/config.toml の既定） $2=回数。信号で止められるよう、裏で動かして wait する
     local args=(exec -C "$PROJ" -s workspace-write -c "model_reasoning_effort=$EFFORT" ${DISABLE[@]+"${DISABLE[@]}"} -o "$LUM_SAFE/last_message.md") rc
     [ -n "$1" ] && args+=(-m "$1")
-    "$CODEX" "${args[@]}" "$PROMPT" < "$LUM_SAFE/spec.md" > "$LUM_SAFE/stdout.$2.log" 2> "$LUM_SAFE/stderr.$2.log" &
+    "$SAFE_PY" -I -S -c 'import os, sys; os.setsid(); os.execv(sys.argv[1], sys.argv[1:])' "$CODEX" "${args[@]}" "$PROMPT" \
+      < "$LUM_SAFE/spec.md" > "$LUM_SAFE/stdout.$2.log" 2> "$LUM_SAFE/stderr.$2.log" &
     LUM_CPID=$!
     wait "$LUM_CPID"; rc=$?
     [ "$LUM_INTERRUPTED" = 1 ] && { wait "$LUM_CPID" 2>/dev/null; rc=130; }
+    stop_group "$LUM_CPID"
     LUM_CPID=""
     return "$rc"
   }
@@ -78,7 +90,9 @@ main() {
     MODEL="$CODEX_FALLBACK_MODEL"; run_codex "$MODEL" 2; RC=$?
     [ "$RC" != 0 ] && [ "$LUM_INTERRUPTED" = 0 ] && is_limit 2 && LIMIT=1
   fi
-  local MS=$(( $(now_ms) - T0 ))
+  local MS=$(( $(now_ms) - T0 )) SETTLE="${LUMINOUS_SETTLE_S:-2}"
+  case "$SETTLE" in ''|*[!0-9]*) SETTLE=2 ;; esac
+  sleep "$SETTLE"
 
   # 検査は終了コードに関係なく必ず行い、違反は 3 を優先する。順序: 入れ子の .git の隔離 → 本物の .git の確認 → git → 比較 → 片付け
   local VIOL=0 GIT_OK=1 STAMP; STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -95,8 +109,17 @@ main() {
   fi
   [ "$("${SC[@]}" fsum "$SPEC")" != "$SPEC_SUM" ] && { echo "codex_impl: 指示書が実行中に変更されました" >&2; VIOL=1; }
   [ "$("${SC[@]}" fsum .env)" != "$ENV_SUM" ] && { echo "codex_impl: .env が変更されました（内容か権限）。差分を確認し、鍵を差し替えてください" >&2; VIOL=1; }
-  "${SC[@]}" compare "$PROJ" "$LUM_SAFE/before.json" "$LUM_SAFE/allowed.txt" "${RG[@]}" || VIOL=1
+  "${SC[@]}" compare "$PROJ" "$LUM_SAFE/before.json" "$LUM_SAFE/allowed.txt" "${RG[@]}" --save-after "$LUM_SAFE/after.json" || VIOL=1
   clean_artifacts   # 検査の後に消す（リンクの __pycache__ は検査で違反にしてから、リンクだけ消す）
+  # 待ってから比べ直す: 検査の後にも書き込みが続いていれば違反（グループから抜け出したプロセスの可能性）
+  sleep "$SETTLE"
+  "${SC[@]}" quarantine-git "$PROJ" "$LUM_SAFE/before.json" "$QDIR" "${RG[@]}" || VIOL=1
+  if [ -f "$LUM_SAFE/after.json" ]; then
+    "${SC[@]}" recheck "$PROJ" "$LUM_SAFE/after.json" "${RG[@]}" || { echo "codex_impl: 検査の後にも書き込みがありました。裏に残ったプロセスを確かめてください" >&2; VIOL=1; }
+  else
+    VIOL=1
+  fi
+  clean_artifacts
 
   local RUNDIR="$PROJ/data/codex_runs/$STAMP-$SPEC_NAME"
   mkdir -p "$RUNDIR" && cp "$LUM_SAFE"/*.log "$LUM_SAFE/allowed.txt" "$RUNDIR/" 2>/dev/null; cp "$LUM_SAFE/last_message.md" "$RUNDIR/" 2>/dev/null

@@ -20,5 +20,6 @@ RUNNING=0; hook_codex_running && RUNNING=1
 } >> "$LOG" 2>&1
 if [ "$RUNNING" = 0 ]; then
   tail -n 200 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
+  hook_flush_escalations   # Codex の実行中に保留したモデル切替の記録を移す
 fi
 exit 0

@@ -23,6 +23,10 @@ main() {
   local CODEX SAFE_PY
   CODEX="$(find_codex)"; [ -n "$CODEX" ] || { echo "codex_opinion: Codex 本体が見つかりません" >&2; return 2; }
   SAFE_PY="$(safe_python)" || { echo "codex_opinion: 作業フォルダの外に python3 がありません" >&2; return 2; }
+  # 公開用の書き出し（git archive）の前に、作業フォルダ内に .git が無いことを確かめる（codex_impl.sh と同じ）
+  "$SAFE_PY" -I -S "$PROJ/tools/scope_check.py" nested-git "$PROJ" \
+    || { echo "codex_opinion: 作業フォルダ内に .git があります。git コマンドを使わずに確かめ、外へ移してから実行してください" >&2; return 2; }
+  [ -e data/.codex_violation ] && { echo "codex_opinion: 前回の Codex 実行の違反が未処理です（data/.codex_violation）" >&2; return 2; }
   acquire_lock || { echo "codex_opinion: 別の Codex が実行中です" >&2; return 2; }
   trap on_exit EXIT
   trap 'exit 130' INT TERM HUP

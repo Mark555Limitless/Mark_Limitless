@@ -41,3 +41,18 @@ def test_cli_record_and_summary(isolated_env, capsys):
     assert usage.main(["--days", "1"]) == 0
     out = capsys.readouterr().out
     assert "codex" in out and "1.5" in out
+
+
+def test_bad_rows_do_not_lower_totals(isolated_env):
+    from orch import usage
+    usage.record("gemini", model="m", purpose="p", usd=0.5)
+    path = isolated_env / "data" / "usage.jsonl"
+    ts = json.loads(path.read_text(encoding="utf-8").splitlines()[0])["ts"]
+    with open(path, "a", encoding="utf-8") as fh:
+        for bad in (-100, "NaN", "abc", "Infinity", True):
+            fh.write(json.dumps({"ts": ts, "vendor": "gemini", "usd": bad, "calls": bad, "ms": bad}) + "\n")
+        fh.write('{"ts": "%s", "vendor": "gemini", "usd": NaN, "calls": -5}\n' % ts)
+    assert usage.today_usd("gemini") == 0.5
+    assert usage.today_calls("gemini") == 1
+    day = next(iter(usage.summarize(1).values()))
+    assert day["gemini"]["usd"] == 0.5 and day["gemini"]["calls"] == 1

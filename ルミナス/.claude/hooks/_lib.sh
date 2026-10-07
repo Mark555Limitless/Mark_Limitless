@@ -22,8 +22,20 @@ hook_nested_git() {
     [ "$d" = "/" ] && break
     d="$(dirname "$d")"
   done
-  if [ "$top_ok" = 1 ]; then find "$ROOT" -mindepth 1 -path "$ROOT/.git" -prune -o -name .git -print 2>/dev/null | head -n 1
-  else find "$ROOT" -mindepth 1 -name .git -print 2>/dev/null | head -n 1; fi
+  # 大文字小文字を区別しない（Mac の既定のファイルシステムでは .GIT も git が .git として読む）
+  if [ "$top_ok" = 1 ]; then find "$ROOT" -mindepth 1 -path "$ROOT/.git" -prune -o -iname .git -print 2>/dev/null | head -n 1
+  else find "$ROOT" -mindepth 1 -iname .git -print 2>/dev/null | head -n 1; fi
+}
+# Codex の違反の印かロック（実行中・中断）があるか。あるあいだ hooks は git を使わない
+hook_codex_unsettled() { [ -e "$ROOT/data/.codex_violation" ] || [ -d "$ROOT/data/codex_runs/.lock" ]; }
+# hooks が使う git。裸のリポジトリとしての発見と fsmonitor を止める（safe.bareRepository は git 2.38 以降。古い git は無視する）
+hook_git() { git -c safe.bareRepository=explicit -c core.fsmonitor=false "$@"; }
+# Codex の実行中に保留したモデル切替の記録を state/escalations.log へ移す（実行中は追跡中のファイルを書き換えない）
+hook_flush_escalations() {
+  local pend="$ROOT/state/.sessions/escalations.pending"
+  [ -s "$pend" ] || return 0
+  hook_codex_running && return 0
+  cat "$pend" >> "$ROOT/state/escalations.log" && rm -f "$pend"
 }
 # 文字単位で各行を N 文字に切る（cut -c は C ロケールでバイト単位になり、日本語を壊すため使わない）
 hook_trunc() {

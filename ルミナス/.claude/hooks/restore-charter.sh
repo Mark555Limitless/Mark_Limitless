@@ -42,19 +42,22 @@ if [ -d "$ROOT/data/codex_runs/.lock" ]; then
   fi
   HEALTH_SKIP="${HEALTH_SKIP:-Codex の実行中または中断}"
 fi
-if [ -z "$NESTED" ] && git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+if [ -z "$NESTED" ] && hook_codex_unsettled; then
+  echo "（Codex の違反の印かロックがあるため、この hook は git の点検を省きました。片付けてから git を使うこと）"
+fi
+if [ -z "$NESTED" ] && ! hook_codex_unsettled && hook_git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   # orch/ に未コミット（未審査）の変更があるうちは、点検（orch のコードを実行する）を行わない
-  [ -n "$(git -C "$ROOT" status --porcelain --untracked-files=all -- orch 2>/dev/null)" ] && HEALTH_SKIP="${HEALTH_SKIP:-orch/ に未審査の変更}"
-  if ! git -C "$ROOT" diff --quiet HEAD -- $PROTECTED 2>/dev/null || [ -n "$(git -C "$ROOT" ls-files --others --exclude-standard -- $PROTECTED 2>/dev/null)" ]; then
+  [ -n "$(hook_git -C "$ROOT" status --porcelain --untracked-files=all -- orch 2>/dev/null)" ] && HEALTH_SKIP="${HEALTH_SKIP:-orch/ に未審査の変更}"
+  if ! hook_git -C "$ROOT" diff --quiet HEAD -- $PROTECTED 2>/dev/null || [ -n "$(hook_git -C "$ROOT" ls-files --others --exclude-standard -- $PROTECTED 2>/dev/null)" ]; then
     echo
     echo "!!! 注意: 憲章・権限・hooks・自走範囲に未コミットの差分があります。Mark の承認済みか確認し、未承認なら元に戻すこと（憲章 §4）。"
-    git -C "$ROOT" status --short -- $PROTECTED 2>/dev/null | head -10 | sed 's/^/    /'
+    hook_git -C "$ROOT" status --short -- $PROTECTED 2>/dev/null | head -10 | sed 's/^/    /'
   fi
   # Mark の承認タグ（luminous-approved-*）以降に保護ファイルがコミットで変わっていれば表示（コミット済みの改ざんの検知）
-  TAG="$(git -C "$ROOT" tag -l 'luminous-approved-*' --sort=-creatordate 2>/dev/null | head -n 1)"
+  TAG="$(hook_git -C "$ROOT" tag -l 'luminous-approved-*' --sort=-creatordate 2>/dev/null | head -n 1)"
   if [ -n "$TAG" ]; then
-    git -C "$ROOT" verify-tag "$TAG" >/dev/null 2>&1 || echo "!!! 承認タグ $TAG の署名を検証できません（未署名か鍵が無い）。Mark に確認すること。"
-    CHG="$(git -C "$ROOT" diff --stat "$TAG" HEAD -- $PROTECTED 2>/dev/null | tail -n 1)"
+    hook_git -C "$ROOT" verify-tag "$TAG" >/dev/null 2>&1 || echo "!!! 承認タグ $TAG の署名を検証できません（未署名か鍵が無い）。Mark に確認すること。"
+    CHG="$(hook_git -C "$ROOT" diff --stat "$TAG" HEAD -- $PROTECTED 2>/dev/null | tail -n 1)"
     [ -n "$CHG" ] && echo "!!! 承認タグ $TAG 以降に保護ファイルがコミットで変更されています（$CHG）。Mark の承認を確認すること。"
   else
     echo "（承認タグ luminous-approved-* はまだありません。憲章が Mark に承認されたら Mark が付ける）"

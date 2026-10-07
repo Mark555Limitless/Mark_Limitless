@@ -27,10 +27,14 @@ if [ -n "$NESTED" ]; then
   echo "ブロック: 作業フォルダ内に .git があります（${NESTED#"$ROOT"/}）。Codex が作った可能性があるので、git を使わずに確かめて外へ移してから commit / push してください。" >&2
   exit 2
 fi
+if [ -e "$ROOT/data/.codex_violation" ]; then
+  echo "ブロック: 前回の Codex 実行の違反が未処理です（data/.codex_violation）。差分を確かめて片付け、この印を消してから commit / push してください。" >&2
+  exit 2
+fi
 {
-  git -C "$ROOT" diff HEAD -U0 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+'
-  git -C "$ROOT" diff --cached -U0 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+'
-  git -C "$ROOT" ls-files --others --exclude-standard -z 2>/dev/null | while IFS= read -r -d '' f; do
+  hook_git -C "$ROOT" diff HEAD -U0 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+'
+  hook_git -C "$ROOT" diff --cached -U0 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+'
+  hook_git -C "$ROOT" ls-files --others --exclude-standard -z 2>/dev/null | while IFS= read -r -d '' f; do
     case "$f" in *.docx|*.png|*.jpg|*.jpeg|*.webp|*.pdf) continue;; esac
     [ -f "$ROOT/$f" ] && [ "$(wc -c < "$ROOT/$f")" -lt 2000000 ] && cat "$ROOT/$f"
   done

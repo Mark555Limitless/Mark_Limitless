@@ -49,7 +49,7 @@ case "$FAKE_MODE" in
   pycache_link) ln -s "$FAKE_TARGET" orch/__pycache__ ;;
   pytestcache_file) echo x > .pytest_cache ;;
   syswrites) mkdir -p logs state/.sessions && echo '{"b":2}' >> data/usage.jsonl && echo "g" >> logs/gemini.log && : > logs/gemini.lock \
-             && : > data/usage.lock && date +%s > state/.sessions/other.start && echo "e" >> state/escalations.log && echo "VERSION_INFO = 2" >> orch/__init__.py ;;
+             && : > data/usage.lock && date +%s > state/.sessions/other.start && echo "e" >> state/.sessions/escalations.pending && echo "VERSION_INFO = 2" >> orch/__init__.py ;;
   truncate_log) : > data/usage.jsonl ;;
   exec_log) chmod +x data/usage.jsonl ;;
   fifo) mkfifo orch/pipe ;;
@@ -57,6 +57,16 @@ case "$FAKE_MODE" in
   envchmod) chmod 644 .env ;;
   newexec) echo "x" >> orch/__init__.py && chmod +x orch/__init__.py ;;
   sleep) sleep 30 ;;
+  upper_git) mkdir -p .GIT && echo "ref: refs/heads/main" > .GIT/HEAD && printf '[core]\n\tfsmonitor = /bin/false\n' > .GIT/config ;;
+  upper_git_sub) mkdir -p orch/.Git && echo "ref: refs/heads/main" > orch/.Git/HEAD ;;
+  linger) echo "VERSION_INFO = 3" >> orch/__init__.py; ( sleep 2; echo late > "$PWD/orch/late.py" ) > /dev/null 2>&1 & ;;
+  escape) echo "VERSION_INFO = 4" >> orch/__init__.py
+          python3 -c 'import os, sys, time; os.setsid(); time.sleep(3); open(sys.argv[1], "w").write("late")' "$PWD/orch/late.py" > /dev/null 2>&1 &
+          sleep 1 ;;  # 抜け出したプロセスが setsid を済ませてから終わる
+  negative_usd) echo '{"ts": "2026-10-08T00:00:00+09:00", "vendor": "gemini", "usd": -100}' >> data/usage.jsonl ;;
+  nan_usd) echo '{"ts": "2026-10-08T00:00:00+09:00", "vendor": "gemini", "usd": NaN}' >> data/usage.jsonl ;;
+  badjson) echo 'not json' >> data/usage.jsonl ;;
+  escalations) mkdir -p state && printf 'x | %s\n' "$FAKE_MARK" >> state/escalations.log && echo "VERSION_INFO = 5" >> orch/__init__.py ;;
 esac
 [ -n "$out" ] && echo "変更しました" > "$out"
 exit 0
@@ -116,7 +126,7 @@ def proj_parent(tmp_path):
 def env_for(proj, mode, extra_env=None):
     p, fake, log, cache = proj
     env = dict(os.environ, CODEX_BIN=str(fake), FAKE_MODE=mode, FAKE_LOG=str(log), FAKE_MARK=MARK, XDG_CACHE_HOME=str(cache),
-               FAKE_PWNED=str(log.parent / "pwned"), FAKE_TARGET=str(log.parent / "target"))
+               FAKE_PWNED=str(log.parent / "pwned"), FAKE_TARGET=str(log.parent / "target"), LUMINOUS_SETTLE_S="0")
     env.pop("CODEX_FALLBACK_MODEL", None)
     env.update(extra_env or {})
     return env
@@ -323,7 +333,7 @@ def test_concurrent_system_writes_are_not_violations(proj):
     _seed_ledger(proj[0])
     r = run(proj, "syswrites")
     assert r.returncode == 0, r.stderr
-    assert "orch/__init__.py" in r.stdout and "usage.jsonl" not in r.stdout
+    assert "orch/__init__.py" in r.stdout
 
 
 @pytest.mark.parametrize("mode", ["truncate_log", "exec_log"])
@@ -398,6 +408,73 @@ def test_spec_name_starting_with_dash_records_purpose(proj, isolated_env):
 def test_parent_layout_allowed_change_ok(proj_parent):
     r = run(proj_parent, "allowed")
     assert r.returncode == 0, r.stderr
+
+
+# ---- 3回目の審査で指摘された抜け道（大文字小文字の .git・追跡中の追記ファイル・残ったプロセス・台帳の数値） ----
+@pytest.mark.parametrize("mode,where", [("upper_git", ".GIT"), ("upper_git_sub", "orch/.Git")])
+def test_case_variant_git_is_quarantined(proj_parent, mode, where):
+    p = proj_parent[0]
+    r = run(proj_parent, mode)
+    assert r.returncode == 3, (r.stdout, r.stderr)
+    assert not os.path.lexists(p / where) and len(quarantined(proj_parent)) == 1
+
+
+def test_case_variant_git_refuses_before_launch(proj):
+    (proj[0] / "orch" / ".GIT").mkdir()
+    r = run(proj, "allowed")
+    assert r.returncode == 2 and not calls(proj)
+
+
+def test_scope_check_git_name_is_case_insensitive(tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sc", ROOT / "tools" / "scope_check.py")
+    sc = importlib.util.module_from_spec(spec); spec.loader.exec_module(sc)
+    for name in (".GIT", ".Git", ".gIt"):
+        d = tmp_path / name.strip(".")
+        (d / name).mkdir(parents=True)
+        assert sc.find_git(str(d)) == [name]
+        assert sc.snapshot(str(d))["files"][name]["t"] == "git"
+
+
+@pytest.mark.parametrize("mode", ["negative_usd", "nan_usd", "badjson"])
+def test_bad_ledger_append_is_violation(proj, mode):
+    _seed_ledger(proj[0])
+    r = run(proj, mode)
+    assert r.returncode == 3, (r.stdout, r.stderr)
+
+
+def test_append_to_tracked_escalations_log_is_violation(proj):
+    r = run(proj, "escalations")
+    assert r.returncode == 3 and "state/escalations.log" in r.stderr
+
+
+def test_append_only_files_are_all_gitignored():
+    """追記だけを許すファイルは公開されない（git の管理外）こと。追跡中のファイルを入れると非公開の印の検査を抜けるため。"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sc", ROOT / "tools" / "scope_check.py")
+    sc = importlib.util.module_from_spec(spec); spec.loader.exec_module(sc)
+    samples = sorted(sc.APPEND_ONLY) + ["logs/gemini.log", "data/usage.lock", "logs/jev.lock", "state/.sessions/x.start", "data/.gemini_disabled"]
+    for rel in samples:
+        r = subprocess.run(["git", "check-ignore", "-q", "--no-index", rel], cwd=ROOT)
+        assert r.returncode == 0, f"{rel} が .gitignore に入っていない"
+
+
+def test_lingering_child_is_stopped_with_codex(proj):
+    r = run(proj, "linger")
+    assert r.returncode == 0, r.stderr
+    time.sleep(3)
+    assert not (proj[0] / "orch" / "late.py").exists(), "Codex の子プロセスが終了後に書き込んだ"
+
+
+def test_escaped_late_writer_is_detected(proj):
+    r = run(proj, "escape", extra_env={"LUMINOUS_SETTLE_S": "2"})
+    assert r.returncode == 3, (r.stdout, r.stderr)
+
+
+def test_ok_output_lists_system_file_changes(proj):
+    _seed_ledger(proj[0])
+    r = run(proj, "syswrites")
+    assert r.returncode == 0 and "記録ファイルの追記" in r.stdout and "data/usage.jsonl" in r.stdout
 
 
 # ---- 意見役 ----

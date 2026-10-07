@@ -89,6 +89,6 @@ clean_artifacts() { find "$PROJ" \( -name __pycache__ -o -name .pytest_cache \) 
 # Codex の実行後に使う git。発見（入れ子の .git）を使わず、本物の GITDIR を明示し、設定に仕込めるコマンドを止める
 sgit() {
   GIT_DIR="$LUM_GITDIR" GIT_WORK_TREE="$LUM_TOPLEVEL" GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
-    git --no-pager -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat "$@"
+    git --no-pager -c safe.bareRepository=explicit -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat "$@"
 }
 now_ms() { local s; s="$(date +%s%N 2>/dev/null)"; case "$s" in *N|'') echo $(( $(date +%s) * 1000 ));; *) echo $(( s / 1000000 ));; esac; }

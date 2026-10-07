@@ -114,5 +114,22 @@ expect "guard-secrets: 入れ子の .git があれば commit を止める" 2 bas
 OUT="$(printf '%s' "$SID" | bash "$R/.claude/hooks/restore-charter.sh")"
 printf '%s' "$OUT" | grep -q '作業フォルダ内に .git' && ng "restore: リポジトリの根の .git を誤検知" || ok "restore: リポジトリの根の .git は正当とみなす"
 
+# 10) 3回目の審査: 大文字小文字の .git・違反の印の間は git を使わない・Codex 実行中のモデル切替の保留
+mkdir -p "$R/sub/.GIT"
+printf '%s' "$SID" | bash "$R/.claude/hooks/restore-charter.sh" | grep -q '作業フォルダ内に .git' && ok "restore: 大文字小文字の違う .GIT も検知" || ng "restore: .GIT"
+rm -rf "$R/sub"
+printf '日時: test\n' > "$R/data/.codex_violation"
+printf '%s' "$SID" | bash "$R/.claude/hooks/restore-charter.sh" | grep -q 'git の点検を省きました' && ok "restore: 違反の印の間は git を使わない" || ng "restore: 違反の印で git 省略"
+expect "guard-secrets: 違反の印の間は commit を止める" 2 bash -c "printf '%s' '{\"tool_input\":{\"command\":\"git commit -m x\"}}' | bash '$R/.claude/hooks/guard-secrets.sh'"
+rm -f "$R/data/.codex_violation"
+ESC="$R/state/escalations.log"; PEND="$R/state/.sessions/escalations.pending"
+N0="$(cat "$ESC" 2>/dev/null | wc -l | tr -d ' ')"
+mkdir -p "$R/data/codex_runs/.lock"; echo "$$ 0" > "$R/data/codex_runs/.lock/owner"
+printf '%s' '{"from_model":"a","to_model":"b"}' | bash "$R/.claude/hooks/log-model-switch.sh" >/dev/null 2>&1
+[ "$(cat "$ESC" 2>/dev/null | wc -l | tr -d ' ')" = "$N0" ] && [ -s "$PEND" ] && ok "model-switch: Codex 実行中は追跡中の記録を書き換えず保留" || ng "model-switch: 実行中の保留"
+rm -rf "$R/data/codex_runs/.lock"
+printf '%s' '{"from_model":"b","to_model":"c"}' | bash "$R/.claude/hooks/log-model-switch.sh" >/dev/null 2>&1
+[ "$(cat "$ESC" | wc -l | tr -d ' ')" = "$((N0 + 2))" ] && [ ! -e "$PEND" ] && ok "model-switch: 終了後に保留分を移して記録" || ng "model-switch: 保留分の移動"
+
 echo "---- $pass passed, $fail failed"
 [ "$fail" = 0 ]

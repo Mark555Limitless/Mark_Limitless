@@ -11,11 +11,13 @@ git を1回も実行しないうちに入れ子の .git を探して隔離する
   scope_check.py snapshot <root> <出力.json>                  ファイルの一覧・種類・権限・ハッシュ・（小さい文章は）内容を記録
   scope_check.py count    <root> <before.json>                変更の件数を出す
   scope_check.py quarantine-git <root> <before.json> <隔離先>  実行後に現れた .git を作業フォルダの外へ移す（見つかれば終了 3）
-  scope_check.py compare  <root> <before.json> <allowed.txt>  ALLOWED 外の変更と非公開の印を検査（0=OK / 3=NG）
+  scope_check.py compare  <root> <before.json> <allowed.txt> [--save-after A]  ALLOWED 外の変更と非公開の印を検査（0=OK / 3=NG）
+  scope_check.py recheck  <root> <after.json>                 検査の後にも書き込みが続いていないか（0=無し / 3=あり）
   scope_check.py gitfp    <gitdir>                            本物の GITDIR の config・hooks・info/attributes のハッシュ
   scope_check.py fsum     <path>                              1ファイルの種類・権限・ハッシュ（FIFO 等は開かない）
   scope_check.py ledger   --data-dir D --vendor codex ...     費用台帳に1行足す（orch.usage と同じ形式・同じロック）
-snapshot・count・quarantine-git・compare は --real-gitdir <GITDIR> を受け取り、本物の .git は比べない。
+snapshot・count・quarantine-git・compare・recheck は --real-gitdir <GITDIR> を受け取り、本物の .git は比べない。
+.git の判定は大文字小文字を区別しない（Mac の既定のファイルシステムでは .GIT も git が .git として読むため）。
 """
 from __future__ import annotations
 
@@ -25,6 +27,7 @@ import fcntl
 import fnmatch
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -40,10 +43,17 @@ HEAVY_TOP = {".venv", "node_modules", "data", "logs"}  # ハッシュだけ記�
 CONTENT_MAX = 2_000_000
 JST = timezone(timedelta(hours=9))
 # Codex の実行中に司令塔・orch・hooks が書く記録（追記だけなら許す。実行可能・リンク・追記以外の変更は違反）
-APPEND_ONLY = {"data/usage.jsonl", "data/decisions_shadow.jsonl", "state/.session-end.log", "state/escalations.log"}
+# git で追跡される（公開される）ファイルは入れない。追記部分は ALLOWED の判定も非公開の印の検査も通らないため（tests が .gitignore を確かめる）
+APPEND_ONLY = {"data/usage.jsonl", "data/decisions_shadow.jsonl", "state/.session-end.log"}
 APPEND_GLOBS = ("logs/*.log",)
 # 中身を問わない印のファイル（ロック・セッションの開始印・停止スイッチ）。通常のファイルで実行権限が無ければ許す。削除は違反
 MARKER_GLOBS = ("data/*.lock", "logs/*.lock", "state/.sessions/*", "data/.*_disabled")
+# 費用台帳の数値の欄（追記された行で、数値でない・負・無限大・NaN なら違反。上限の計算を壊させない）
+LEDGER_NUMS = ("usd", "calls", "in_tokens", "out_tokens", "ms")
+
+
+def is_git_name(name: str) -> bool:
+    return name.casefold() == ".git"
 
 
 def _open_regular(path: str):
@@ -112,7 +122,7 @@ def snapshot(root: str, real_gitdir: str = "") -> Dict[str, dict]:
         for d in dirnames:
             full = os.path.join(dirpath, d)
             rel = _rel(root, full)
-            if d == ".git":
+            if is_git_name(d):
                 if not _is_real_git(full, real_git):
                     files[rel] = _git_entry(full)  # 本物の GITDIR は比べない（config・hooks は gitfp、HEAD は codex_impl.sh が確かめる）
                 continue
@@ -130,7 +140,7 @@ def snapshot(root: str, real_gitdir: str = "") -> Dict[str, dict]:
                 st = os.lstat(full)
             except FileNotFoundError:
                 continue
-            if f == ".git":
+            if is_git_name(f):
                 files[rel] = _git_entry(full)
                 continue
             if stat.S_ISLNK(st.st_mode):
@@ -176,9 +186,9 @@ def find_git(root: str) -> List[str]:
     found = []
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         for name in dirnames + filenames:
-            if name == ".git":
+            if is_git_name(name):
                 found.append(_rel(root, os.path.join(dirpath, name)))
-        dirnames[:] = [d for d in dirnames if d != ".git"]
+        dirnames[:] = [d for d in dirnames if not is_git_name(d)]
     return sorted(found)
 
 
@@ -211,7 +221,7 @@ def quarantine_git(root: str, before: dict, dest: str, real_gitdir: str = "") ->
     if targets:
         os.makedirs(dest, mode=0o700, exist_ok=True)
     for i, rel in enumerate(targets, 1):
-        target = os.path.join(dest, "%02d-%s" % (i, rel.replace("/", "_").replace(".git", "dotgit")))
+        target = os.path.join(dest, "%02d-%s" % (i, re.sub(r"(?i)\.git", "dotgit", rel.replace("/", "_"))))
         try:
             shutil.move(os.path.join(root, rel), target)
             moved.append(rel)
@@ -298,8 +308,36 @@ def system_change_problem(root: str, p: str, b: Optional[dict], a: Optional[dict
             return f"記録ファイルを読めない: {p}"
         with fh:
             head = fh.read(n)
+            tail = fh.read(CONTENT_MAX)
         if hashlib.sha256(head).hexdigest() != b.get("h"):
             return f"記録ファイルの既存部分が変わった（追記以外の変更）: {p}"
+        if p.endswith(".jsonl"):
+            return _jsonl_problem(p, tail)
+    elif p.endswith(".jsonl") and (b is None or b.get("t") != "file"):
+        fh = _open_regular(os.path.join(root, p))
+        if fh is None:
+            return f"記録ファイルを読めない: {p}"
+        with fh:
+            return _jsonl_problem(p, fh.read(CONTENT_MAX))
+    return ""
+
+
+def _jsonl_problem(p: str, data: bytes) -> str:
+    """追記された JSON 行が、オブジェクトで、台帳なら数値の欄が 0 以上の有限の数かを確かめる。"""
+    for i, line in enumerate(data.decode("utf-8", "replace").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            return f"記録ファイルに JSON でない行が追記された: {p}（追記 {i} 行目）"
+        if not isinstance(row, dict):
+            return f"記録ファイルに JSON オブジェクトでない行が追記された: {p}（追記 {i} 行目）"
+        if p == "data/usage.jsonl":
+            for k in LEDGER_NUMS:
+                v = row.get(k, 0)
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0:
+                    return f"費用台帳に不正な数値が追記された（{k}）: {p}（追記 {i} 行目）"
     return ""
 
 
@@ -386,7 +424,25 @@ def compare(root: str, before: dict, allowed: List[str], real_gitdir: str = "") 
             if any(m in line for m in PRIVATE_MARKERS):
                 problems.append(f"非公開の印の混入: {p}（追加行 {i}）")
                 break
-    return problems, [p for p in changed if not is_system(p)]
+    return problems, changed, after
+
+
+def recheck(root: str, after: dict, real_gitdir: str = "") -> List[str]:
+    """検査の後（片付けと待ち時間の後）にもう一度記録し、書き込みが続いていないかを確かめる。
+    許すのは、片付けで消えたリンク等の __pycache__ と、記録ファイルの追記・印のファイルだけ。"""
+    now = snapshot(root, real_gitdir)
+    problems = []
+    for p in changes(after, now):
+        b_ent, ent = after["files"].get(p), now["files"].get(p)
+        if ent is None and (b_ent or {}).get("t") == "badartifact":
+            continue
+        if is_system(p) and (ent or {}).get("t") != "git":
+            why = system_change_problem(root, p, b_ent, ent)
+            if why:
+                problems.append(why)
+            continue
+        problems.append(f"検査の後にも変更が続いた（Codex が残したプロセスの可能性）: {p}")
+    return problems
 
 
 def ledger(a: argparse.Namespace) -> int:
@@ -417,6 +473,8 @@ def main(argv: List[str]) -> int:
     s = sub.add_parser("snapshot"); s.add_argument("root"); s.add_argument("out"); s.add_argument("--real-gitdir", default="")
     s = sub.add_parser("count"); s.add_argument("root"); s.add_argument("before"); s.add_argument("--real-gitdir", default="")
     s = sub.add_parser("compare"); s.add_argument("root"); s.add_argument("before"); s.add_argument("allowed"); s.add_argument("--real-gitdir", default="")
+    s.add_argument("--save-after", default="")
+    s = sub.add_parser("recheck"); s.add_argument("root"); s.add_argument("after"); s.add_argument("--real-gitdir", default="")
     s = sub.add_parser("quarantine-git"); s.add_argument("root"); s.add_argument("before"); s.add_argument("dest"); s.add_argument("--real-gitdir", default="")
     s = sub.add_parser("gitfp"); s.add_argument("gitdir")
     s = sub.add_parser("fsum"); s.add_argument("path")
@@ -462,17 +520,33 @@ def main(argv: List[str]) -> int:
             return 4
         return 3 if moved else 0
     if a.cmd == "compare":
-        allowed = [l for l in open(a.allowed, encoding="utf-8").read().splitlines() if l]
-        problems, changed = compare(a.root, _load(a.before), allowed, a.real_gitdir)
+        with open(a.allowed, encoding="utf-8") as fh:
+            allowed = [l for l in fh.read().splitlines() if l]
+        problems, changed, after = compare(a.root, _load(a.before), allowed, a.real_gitdir)
+        if a.save_after:
+            fd = os.open(a.save_after, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(after, fh, ensure_ascii=False)
         if problems:
             print("scope_check: NG", file=sys.stderr)
             for pr in problems[:50]:
                 print(f"  - {pr}", file=sys.stderr)
             return 3
-        print(f"scope_check: OK（変更 {len(changed)} 件、すべて ALLOWED 内）")
-        for p in changed[:50]:
+        user = [p for p in changed if not is_system(p)]
+        system = [p for p in changed if is_system(p)]
+        print(f"scope_check: OK（変更 {len(user)} 件、すべて ALLOWED 内）")
+        for p in user[:50]:
             print(f"  - {p}")
+        if system:
+            print(f"scope_check: 記録ファイルの追記・印のファイル {len(system)} 件（検査済み）")
+            for p in system[:20]:
+                print(f"  - {p}")
         return 0
+    if a.cmd == "recheck":
+        problems = recheck(a.root, _load(a.after), a.real_gitdir)
+        for pr in problems[:50]:
+            print(f"scope_check: {pr}", file=sys.stderr)
+        return 3 if problems else 0
     if a.cmd == "gitfp":
         print(git_fingerprint(a.gitdir))
         return 0

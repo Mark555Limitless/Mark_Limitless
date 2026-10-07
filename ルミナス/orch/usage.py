@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -94,8 +95,23 @@ def _sum(vendor: str, since: datetime, field: str) -> float:
         dt = _parse_ts(row.get("ts", ""))
         if dt is None or dt < since:
             continue
-        total += float(row.get(field) or 0)
+        total += _amount(row.get(field))
     return total
+
+
+def _amount(v: Any) -> float:
+    """台帳の数値。数値でない・負・無限大・NaN は 0 として扱う（壊れた行や細工した行で合計を減らさせない）。"""
+    if isinstance(v, bool):
+        return 0.0
+    if not isinstance(v, (int, float)):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return 0.0
+    v = float(v)
+    if not math.isfinite(v) or v < 0:
+        return 0.0
+    return v
 
 
 def _start_of_today() -> datetime:
@@ -125,9 +141,9 @@ def summarize(days: int = 7) -> Dict[str, Dict[str, Dict[str, float]]]:
         if dt is None or dt < since:
             continue
         cell = out[dt.date().isoformat()][row.get("vendor", "?")]
-        cell["calls"] += int(row.get("calls") or 0)
-        cell["usd"] += float(row.get("usd") or 0)
-        cell["ms"] += int(row.get("ms") or 0)
+        cell["calls"] += int(_amount(row.get("calls")))
+        cell["usd"] += _amount(row.get("usd"))
+        cell["ms"] += int(_amount(row.get("ms")))
     return {d: dict(v) for d, v in sorted(out.items())}
 
 
