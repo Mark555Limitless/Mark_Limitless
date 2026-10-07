@@ -5,3 +5,4 @@
 2026-10-07T17:25:57Z | 統治・安全の 5 論点の上位審査 | claude-sonnet-5-5 | claude-opus-5-5 | Sonnet が判断しきれないとした論点（憲章と Mark の指示の衝突、自己改変、外部送信と規約、未検証事実、Jev の評価循環）。Fable までは不要と判断 | 完了。実装 6 項目を反映、統治の変更 6 件は docs/proposals に差分で提示（Mark 承認待ち）
 2026-10-07T17:25:57Z | 司令塔セッション | claude-fable-5-1 | claude-opus-5-5 | 実行環境側でのモデル切替（司令塔の判断ではない）。以後の司令塔作業は Opus 5.5 | 継続中
 2026-10-07T17:35:01Z | 司令塔セッション | claude-opus-5-5 | claude-opus-5-5 | Mark が /model で claude-opus-5-5 を明示指定（直前の実行環境側の切替を Mark が確定） | 継続中
+2026-10-07T17:57:18Z | 分譲指示書の実装のコード審査 | claude-opus-5-5 | claude-opus-5-5（Agent・model 明示） | 分譲指示書 §5.1-5 の規定（コード審査は Opus） | 審査中

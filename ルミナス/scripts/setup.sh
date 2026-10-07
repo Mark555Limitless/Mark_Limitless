@@ -11,12 +11,19 @@ if git -C "$HERE" rev-parse --show-toplevel >/dev/null 2>&1; then
 else
   echo "git リポジトリではないため git フックは未設定（git init 後に再実行）"
 fi
+# Python の仮想環境（orch・tests 用。requests・python-dotenv・pytest）
+if command -v python3 >/dev/null 2>&1; then
+  [ -x "$HERE/.venv/bin/python" ] || python3 -m venv "$HERE/.venv"
+  "$HERE/.venv/bin/pip" install -q -r "$HERE/requirements.txt" && echo "Python 仮想環境を用意（.venv）"
+fi
 if command -v npm >/dev/null 2>&1; then
   (cd "$HERE" && npm install --no-audit --no-fund >/dev/null 2>&1 && echo "npm 依存を導入（docx 生成）") || echo "npm install に失敗（docx 生成は手動で）"
 fi
 cat <<'MSG'
 次に行うこと（Mark 本人）:
   - Obsidian へ同期するなら、シェルで  export LUMINOUS_OBSIDIAN_DIR="/絶対パス/Vault"  を設定（鍵ではないので .zshrc 可）
-  - Codex は  codex login  をブラウザで。Gemini / Jev の鍵は OS のキーチェーンやシェル環境から各ラッパーが読む（ファイルには書かない）
+  - Codex は ChatGPT アプリ（Codex 同梱）にログイン済みであること
+  - Gemini / Jev の鍵は  bash tools/set_env_key.sh GEMINI_API_KEY  /  bash tools/set_env_key.sh TYPESAFE_API_KEY  で .env（600・git 管理外）に入れる。チャットには貼らない
+  - 点検:  .venv/bin/python -m orch.health
   - このフォルダで  claude  を起動すると hooks（復元・鍵ガード・Stop ゲート・同期）が有効になる
 MSG

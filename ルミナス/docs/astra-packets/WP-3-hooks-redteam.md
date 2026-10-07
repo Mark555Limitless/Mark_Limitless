@@ -10,7 +10,7 @@
 観点:
 1. guard-secrets.sh をすり抜ける鍵の書き方（分割、base64、環境変数経由、ファイル名、--no-verify 相当）と、検知を強める最小の修正案
 2. stop-gate.sh の誤作動・無限ループ・迂回（時刻の巻き戻し、touch だけで通る問題を含む）と対策
-3. restore-charter.sh が注入する内容へのプロンプトインジェクション経路（latest.md や digest に悪意ある指示が書かれた場合）と対策
+3. restore-charter.sh が注入する内容へのプロンプトインジェクション経路（HANDOVER.md や digest に悪意ある指示が書かれた場合）と対策
 4. session-end.sh / sync-obsidian.sh が Obsidian vault を壊す条件（パス誤設定、同名ファイルの上書き、シンボリックリンク）と対策
 5. macOS と Linux の差（stat・date・bash のバージョン）で壊れる箇所
 

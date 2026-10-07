@@ -21,19 +21,17 @@
 ## 2. Mac での実行手順
 
 ```bash
-# 1) 一度だけ: Codex を入れてブラウザでログイン（鍵は貼らない）
-npm i -g @openai/codex
-codex login
+# 1) 一度だけ: ChatGPT アプリ（Codex 同梱）にログインしておく。初回は scripts/setup.sh も実行
 
 # 2) ルミナスのフォルダで、パケットを渡す（モデルは環境に合わせて）
 cd "<Mac の正本フォルダ>"
-ASTRA_MODEL=gpt-6-astra scripts/ask-astra.sh docs/astra-packets/WP-1-architecture-review.md
-scripts/ask-astra.sh docs/astra-packets/WP-2-eval-set-v0.md
-scripts/ask-astra.sh docs/astra-packets/WP-3-hooks-redteam.md
-scripts/ask-astra.sh docs/astra-packets/WP-4-codex-integration.md
+bash tools/codex_opinion.sh docs/astra-packets/WP-1-architecture-review.md
+bash tools/codex_opinion.sh docs/astra-packets/WP-2-eval-set-v0.md
+bash tools/codex_opinion.sh docs/astra-packets/WP-3-hooks-redteam.md
+bash tools/codex_opinion.sh docs/astra-packets/WP-4-codex-integration.md
 ```
 
-- `ASTRA_MODEL` の既定は `gpt-6-astra`。無効と言われたら Codex が示すモデル名（GPT-6 Sol 等）に変える
+- モデルは `CODEX_MODEL`（空なら `~/.codex/config.toml` の既定、現在 gpt-6-astra）。不通なら gpt-5.6-sol
 - 回答は `docs/astra-replies/` に自動保存される。コミットして司令塔に渡す
 - 対話で使う場合は `codex` を起動し「.codex/agents/astra-architect.toml の役割で docs/astra-packets/WP-1-architecture-review.md に答えて」と頼めばよい
 
@@ -48,6 +46,6 @@ scripts/ask-astra.sh docs/astra-packets/WP-4-codex-integration.md
 
 1. クラウド環境の設定で、ネットワーク許可に `api.openai.com`・`auth.openai.com`・`chatgpt.com`（Codex）、`api.typesafe.ai`（Jev）を追加する（Gemini の `generativelanguage.googleapis.com` は既に到達可）
 2. 同じ設定画面の「Network secrets（API 資格情報）」または環境変数に `OPENAI_API_KEY`・`GEMINI_API_KEY`・`TYPESAFE_API_KEY` を登録する。チャットには貼らない
-3. 新しいセッションで `scripts/ask-astra.sh` を実行すると、スクリプト自身が環境変数から Codex にログインする（司令塔は値を扱わず、表示もしない）。残るリスクは `docs/support-ai.md` §1 のとおり
+3. Codex は ChatGPT アプリのログインで動く（API キーは使わない）。クラウド環境で Codex を動かす方法は未確立のため、当面は Mac で実行する
 
 この設定が無い間は §2 の手順で分担する。

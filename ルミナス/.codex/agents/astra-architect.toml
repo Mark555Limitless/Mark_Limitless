@@ -1,5 +1,5 @@
 # Codex カスタムエージェント: ルミナスの第二意見・反証役（Thinker/Verifier）
-# 使い方: codex exec でこの役割を指名するか、scripts/ask-astra.sh から呼ぶ
+# 使い方: tools/codex_opinion.sh から呼ぶ（読み取り専用の第3の意見）
 name = "astra-architect"
 description = "ルミナス（Luminous）の設計・文書・hooks を、憲章との整合・壊れる条件・コスト・実現可能性の観点で批評する第二意見役。ファイルは変更しない。"
 sandbox_mode = "read-only"

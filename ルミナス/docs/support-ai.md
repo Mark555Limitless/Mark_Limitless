@@ -1,85 +1,116 @@
-# サポートAI（Codex・Gemini・Jev）— AI NEWS Select の仕組みをルミナスへ移す v0.1
+# サポートAI（Codex・Gemini・Jev）— 常に使える仕組み v0.2
 
-> Mark の「Fable5.1 AI NEWS Select」（AIニュースの検証と解説）では、司令塔 Claude のもとで
-> **Codex・Gemini・Jev を常用**している。ルミナスはその三者を「サポートAI」として同じ位置に置く。
-> AI NEWS Select 側の定義ファイル（CLAUDE.md / ROUTINE.md / digest 等）は本調査では見つからなかったため、
-> 本書は Mark の指示と各サービスの公開情報から再構成したものである。**実物のファイルを `docs/ai-news-select-ref/` に置いてもらえれば、
-> 用語・手順をそちらに合わせて v0.2 で揃える。**
+> 出典: Fable5 AI NEWS Select の司令塔が書いた「ルミナス分譲指示書 — Codex・Gemini・Jev を常に使える仕組み」（2026-10-08）。
+> 原本はローカルの絶対パスを含むため、この公開フォルダには入れず、Mac の非公開フォルダ（`ルミナス_非公開/`）で保管する。本書はその要約と、ルミナスでの実装の対応表。
+> 原本の bot（AI NEWS Select）のファイルはクラウド環境から読めないため、部品はコピーではなく指示書の仕様から再実装した。Mac で原本と見比べて差を詰める。
 
-## 1. 三者の役割分担（ルミナスでの標準）
+## 1. 三者の役割と呼び方
 
-| サポートAI | 得意 | ルミナスでの役割（TRINITY 風） | 典型的な呼び方 | 鍵の環境変数 |
-|---|---|---|---|---|
-| **Codex**（GPT-6 Astra / Sol） | 長時間の自律作業、実装、第二意見 | **Worker（実装）** と **Thinker 第二意見（反証役）** | `scripts/ask-astra.sh <パケット>`（`codex exec`） | `OPENAI_API_KEY`（または `codex login`） |
-| **Gemini**（Gemini CLI / API） | 長文・多モーダル・Google 検索グラウンディング、別ベンダーの視点 | **StarPulse（調査）** と **クロスベンダー検証**（Claude/Codex と答えが割れたときの第三の目） | `scripts/ask-gemini.sh <パケット>`（`gemini -p`） | `GEMINI_API_KEY` |
-| **Jev**（TypeSafe AI）【実験】 | 文章を生成せず、型付きの判定だけを返す（Noul=はい/いいえの確率、Choice=選択、Score=採点） | **止める側の信号だけ**: NO-GO・保留、出典の信頼度分類、エスカレーション要否、憲章違反の疑いフラグ。通す根拠や改善の採点には使わない（`docs/eval-design.md`） | `scripts/jev_gate.py`（`POST /v1/systemone`。OpenRouter 経由も可） | `TYPESAFE_API_KEY`（OpenRouter 経由なら `OPENROUTER_API_KEY`） |
+| 外部AI | ルミナスでの役目 | 固定コマンド | 費用の出どころ |
+|---|---|---|---|
+| **Codex**（GPT-6 Astra） | コードの実装。読み取り専用の「第3の意見」 | `bash tools/codex_impl.sh docs/specs/<名前>.md high` ／ `bash tools/codex_opinion.sh docs/astra-packets/<名前>.md` | ChatGPT サブスクの枠（原本・脳でんちと共有） |
+| **Gemini**（3.8 Flash ほか） | 文章の下書き・要約・別の視点 | `python3 -m orch.gemini gen --purpose <用途> < prompt.txt` ／ コードから `orch.gemini.generate()` | 従量課金（1日の上限つき） |
+| **Jev**（TypeSafe AI の System One） | 選択肢・段階・確率で答える「構造化された判断」の助言 | コードから `orch.decisions.ask(state, questions)`（Jev → Claude CLI → 既定値） | 従量課金（回数と月額の上限つき） |
 
-鍵はいずれも **Mark のシェルや OS のキーチェーンから、各ラッパースクリプトが実行時に読む**。ファイル（`settings.local.json` を含む）・チャット・コミットに書かない（憲章 I-4）。
-司令塔は値を表示・記録しない。`printenv`・`env` と鍵ファイルの読取は permissions で deny しているが、環境変数は原理的にプロセスから読めるため、残るリスクは「司令塔のセッション環境に鍵を置かない」運用で下げる（鍵が要るのはラッパーを実行する Mark のシェル側）。
+- 司令塔と審査は Claude のまま。外部AIの答えは助言であり、最終判断は Claude（[永]）
+- 取り消せない操作（公開・送信・削除・支払い）の承認は外部AIに委ねない
+- Gemini は API だけを使う。Antigravity（agy）を Claude Code から呼ぶことは Google の規約違反（アカウント停止の対象）なので使わない
+- Jev は助言であり、評価セット（`docs/eval-design.md`）で確かめるまでは「止める側」の信号として使う。新しい問いを任せる前に、正解つきの例を100問以上集めてオフラインで比べる
 
-## 2. なぜこの三者か（AI NEWS Select の仕組みの読み替え）
+## 2. 共通の骨格（6点セット）— そろってから使う
 
-AI NEWS Select の検証規則（Mark の指示）は次の通りで、三者はそれぞれの段に対応する。
-
-| AI NEWS Select の段 | 内容 | 担当 |
+| | 中身 | ルミナスでの実装 |
 |---|---|---|
-| 一次情報の収集・照合 | 公式発表・論文・公式 GitHub を直接読み、報道の要約と照合 | Claude（司令塔）＋ **Gemini**（検索グラウンディング・長文読解） |
-| 出典の信頼度判定 | ①一次情報 〜 ⑤個人ブログ の 5 段階に分類。自己申告か第三者測定かを区別 | **Jev**（Choice: ①〜⑤ の分類、Noul: 「自己申告のみか」） |
-| 矛盾・極端な主張の深掘り | 数値の食い違い、裏付けの薄い極端な主張をサブ LLM で検証し GO/NO-GO | **Codex**（反証役）＋ Claude（Opus）。最終 GO/NO-GO の数値化は **Jev**（Score） |
-| エスカレーション | 通常 Opus 4.8 以下、極めて重大・矛盾深刻時のみ Fable 5 | **Jev**（Noul: 「上位モデルの裁定が必要か」）→ 司令塔が切替し `state/escalations.log` に記録 |
-| 機能確認 | 製品・モデルの実能力を公式ドキュメント・デモ・第三者レビューで確認 | **Codex**（実際に動かす）＋ Gemini（第三者レビューの収集） |
+| ①固定コマンド | 必ずラッパー経由で、毎回同じコマンド | `tools/codex_impl.sh`・`tools/codex_opinion.sh`・`python3 -m orch.gemini`・`python3 -m orch.decisions` |
+| ②上限 | 日・月ごとの金額と回数。超えたら呼ばずに理由を返す | `ORCH_GEMINI_DAILY_USD_CAP`（既定 $1/日）、`ORCH_JEV_DAILY_MAX`（60回/日）・`ORCH_JEV_MONTHLY_USD`（$1/月）。Codex は同時 1 本（ロック） |
+| ③記録 | 1回1行。本文・鍵・生のエラーは書かない | `data/usage.jsonl`（全ベンダー共通）、`logs/gemini.log`・`logs/jev.log`、`data/decisions_shadow.jsonl`（問いと答え、5MB で打ち切り）、`data/codex_runs/` |
+| ④点検 | 鍵・疎通・当日の支出を1行で。セッション開始時に毎回表示 | `python3 -m orch.health`（SessionStart hook が表示。`FABLE5_HEADLESS=1` では出さない） |
+| ⑤停止スイッチ | 環境変数とファイルの2通り | `ORCH_CODEX=0`／`data/.codex_disabled`、`ORCH_GEMINI=0`／`data/.gemini_disabled`、`ORCH_JEV=0`／`data/.jev_disabled` |
+| ⑥フォールバック | 失敗しても本流は止めない。戻したことを記録する | Gemini は rc=2（基盤の失敗）／3（中身の失敗）で Claude に戻す。判断層は Jev → Claude CLI（Haiku→Sonnet）→ 既定値。審査だけは fail-closed |
 
-Jev を「止める側のゲート」に置く理由: 文章を生成しないので速く安く（公開情報では入力 100 万トークンあたり約 0.042 USD、出力無料。自己申告・2026-09 時点）、
-判定が確率と信頼度で返るため **閾値をルールとして書ける**（例: 「出典が③以下の確率 > 0.6 なら投稿しない」）。
-ただし Jev 自身の判定も「主張」であり、閾値と採点基準は評価セットで校正する（ROUTINE §4、Phase 1）。
+集計: `python3 -m orch.usage --days 7`（日別・ベンダー別）。Codex は金額が出ないので回数と所要時間だけ。
+この台帳は後で「どの仕事にどのモデルが割に合うか」を決める材料にする（原本の設計参照 §5 A の動的なモデル選択）。
 
-## 3. 呼び出しの標準形（パケット方式）
+## 3. Codex（実装役・意見役）
 
-三者とも **パケット（Markdown の依頼文）を渡し、回答をファイルに保存**する。これにより会話が切れても結果が残り、司令塔が裏取りしてから採用できる。
+- 実装: 指示書（`docs/specs/`、型は `docs/specs/README.md`）→ `tools/codex_impl.sh`（`-s workspace-write`、memories と multi_agent を無効化）→ `tools/scope_check.py` が ALLOWED 外の変更と非公開の印（`/Users/`・`_非公開`）を検出 → `git diff` → テスト → 審査（Agent・model: opus・`docs/review.md`、1行目 APPROVE）→ 司令塔が該当ファイルだけコミット
+- 終了コード: 0=成功 / 2=前提の誤り（停止中・実行中・指示書不備・作業ツリーが汚い・本体なし）/ 3=ALLOWED 外・非公開の印・`.env` の変更 / 4=利用枠の上限 / 5=Codex の失敗
+- 失敗かつ作業ツリーが無変更のときだけ、`CODEX_FALLBACK_MODEL`（既定 gpt-5.6-sol）で1回やり直す
+- 利用枠の上限（「try again at …」）: 指示書を残して待つ。途中の差分があれば再実行せず、司令塔がテストまで仕上げて審査に回す。原本の障害修正を優先する
+- 本体の場所: `CODEX_BIN` → ChatGPT アプリ同梱（2026-10-06 以降の場所）→ 古い場所（`CODEX_OLD_BIN`）→ PATH
+- 意見役: `-s read-only`、公開可・push 済みのファイルだけを書き出した使い捨てディレクトリで起動、回答は `docs/astra-replies/`
 
-- Codex: `docs/astra-packets/*.md` → `docs/astra-replies/`
-- Gemini: `docs/gemini-packets/*.md` → `docs/gemini-replies/`
-- Jev: 判定リクエストは JSON（`scripts/jev_gate.py --state-file <対象> --questions docs/jev-questions/news-gate.json`）→ `state/jev/` に判定ログ（確率・閾値・結論・usage）。API は `POST https://api.typesafe.ai/v1/systemone`（model `jev-latest`）、または OpenRouter `POST /api/alpha/decisions`（model `typesafe/jev-1.13`）。公式 SDK は `pip install typesafe-sdk` / `npm install @typesafe-ai/sdk`
+## 4. Gemini（下書き・別の視点）
 
-## 4. ネットワークと鍵（クラウド環境で動かす場合）
+- 送り先 `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`、鍵はヘッダ `x-goog-api-key`
+- `thinkingConfig.thinkingLevel` を付け、モデルに拒まれたら外して1回だけ送り直す。応答全体の待ち時間を別スレッドで打ち切る。`thought: true` の部分は本文に入れない
+- 費用: promptTokenCount × 入力単価 ＋（candidatesTokenCount ＋ thoughtsTokenCount）× 出力単価。既定は $0.75／$3.75（100万トークンあたり）。**2027-01 から $1.50／$7.50 に上がる予定**（公式の価格ページで確かめて `.env` を更新）
+- 使用量の無い応答・通信例外・5xx は控えめに $0.05 を計上（処理されたか不明でも上限に数える）。401／403／429 は処理前の拒否として計上しない
+- 点検: `python3 -m orch.gemini check`（鍵の有無・本文を送らない疎通確認・当日の支出と上限）
+- 画像生成は必要になってから（段階5）
 
-| 宛先 | 用途 | 2026-10-07 の到達性（クラウド環境） |
-|---|---|---|
-| `api.openai.com`, `auth.openai.com`, `chatgpt.com` | Codex | 遮断（403） |
-| `generativelanguage.googleapis.com` | Gemini API / CLI | 到達可（鍵は未設定） |
-| `api.typesafe.ai`（または `openrouter.ai`） | Jev | 遮断（403） |
-| `api.x.ai` | Grok | 遮断（403） |
+## 5. Jev（構造化された判断の助言）
 
-クラウド環境で動かすには上記ホストの許可と、環境側の「Network secrets／環境変数」への鍵登録が必要（司令塔の環境にも鍵が見える点は上記のとおり残るリスク。許可ホストは最小限にする）。
-Mac で動かす場合は Mark のシェル環境（キーチェーン経由を推奨）に鍵を置き、`.claude/settings.local.json` には書かない。
-
-## 5. 外部へ渡す範囲（境界）
-
-- 送出の単位は「パケット」ではなく**外部AIが読めるもの全部**。Codex・Gemini は `scripts/export-public.sh` が書き出した使い捨てディレクトリで起動する
-  （中身は `docs/external-allowlist.txt` の公開可パスだけ。push 済みの上流から書き出すので、未 push の変更は外に出ない。`state/`・`digest/`・`obsidian/`・他AIの回答は含めない）
-- パケットは `docs/astra-packets/`・`docs/gemini-packets/` に置いたものだけを受け付ける。送信前に鍵の検査を通す
-- Jev は判定対象の全文が第三者に渡る。allowlist の外の文書は `--public-ok`（公開予定であることを Mark が確認済み）が要る
-- 残るリスク: read-only のサンドボックスでも、外部 CLI が使い捨てディレクトリの外を読めるかは未確認（検証台帳の優先 1）。秘匿情報の検査は鍵の形しか見ず、個人情報や第三者の名前は検出しない
+- 送り先 `POST https://api.typesafe.ai/v1/systemone`、`Authorization: Bearer <TYPESAFE_API_KEY>`、本文 `{"state": 文字列, "model": "jev-latest", "questions": {...}}`、応答の `answers.<問いID>`
+- 判断層 `orch.decisions`: 問いの型は Choice（選択肢のキー、120 個以下）・Score（0〜n-1）・Noul（0〜1）。問いごとに失敗時の既定値を持つ
+- 順番: jev（`JEV_ENABLED=1`・`DECISION_BACKEND=jev`・鍵あり）→ anthropic（`claude -p … --tools ""` を Haiku → Sonnet、JSON だけ）→ rules（既定値）。`fallback=False` なら Jev の失敗で既定値
+- 時間の予算 `DecisionBudget`（ミリ秒）。`CYCLE_START_EPOCH` があれば便の残り時間でも打ち切る
+- 影ログには問いと答えを書き、判断対象の本文は書かない（文字数だけ）。鍵は伏せる
+- 料金は入力10億トークンあたり $42、1問 約 $0.0003、応答 約0.5秒（TypeSafe の自社公表・第三者検証なし）。日本語対応は一次資料に記載が無い
+- 原本の実績（二重投稿の判定、原本での実測）: 一致度 κ 0.54（補正後 約0.69）、Claude Haiku と同等以上の精度で約45倍速い。それでも最終判断は置き換えていない
+- 問いの wire 形式（`instructions`・`criteria`）は二次情報からの再構成。Mac で原本の `decisions.py` と見比べて合わせる
 
 ## 6. 各社の条件の確認表（Mark が記入。半年ごとと契約プランの変更時に見直す）
 
-この表が埋まるまでは、公開リポジトリに push 済みのものだけを送る。
+この表が埋まるまでは、公開リポジトリに push 済みのもの（公開可）だけを外部AIに送る。
 
-| 確認項目 | Codex（ChatGPT ログイン） | Codex（API キー） | Gemini（無料枠） | Gemini（有料） | Jev（直接） | OpenRouter 経由 |
-|---|---|---|---|---|---|---|
-| 学習に使われるか（既定・オプトアウトの設定名） | | | | | | |
-| 保持期間（不正監視用を含む）・ゼロ保持の可否 | | | | | | |
-| 人がレビューするか | | | | | | |
-| 適用される規約（消費者向け／API・事業者向け） | | | | | | |
-| 再委託先・処理地域 | | | | | | |
-| 出力の利用制限（競合モデル開発の禁止など） | | | | | | |
-| 自動実行・API 利用の条項 | | | | | | |
-| CLI のテレメトリ | | | | | | |
-| 第三者の個人情報の条項 | | | | | | |
-| 確認日・一次情報 URL・規約の版 | | | | | | |
+| 確認項目 | Codex（ChatGPT ログイン） | Gemini API（有料枠） | Jev（TypeSafe 直接） |
+|---|---|---|---|
+| 学習に使われるか（既定・オプトアウトの設定名） | | | |
+| 保持期間（不正監視用を含む）・ゼロ保持の可否 | | | |
+| 人がレビューするか | | | |
+| 適用される規約（消費者向け／API・事業者向け） | | | |
+| 再委託先・処理地域 | | | |
+| 出力の利用制限（競合モデル開発の禁止など） | | | |
+| 自動実行・API 利用の条項 | | | |
+| CLI のテレメトリ | | | |
+| 第三者の個人情報の条項 | | | |
+| 確認日・一次情報 URL・規約の版 | | | |
 
-## 7. 未確認・要確認
+## 7. 外部へ渡す範囲（境界）
 
-- Jev API のリクエスト形式はコミュニティの実例と公式 SDK README から再構成した（公式ドキュメント本文は未読）。直接 API は早期アクセス待ちとの記述が一つあり、その場合は OpenRouter 経由（`JEV_PROVIDER=openrouter`）で動かす
-- AI NEWS Select で使っている Gemini のモデル名、Jev の質問セット（実物の定義ファイルを参照したい）
-- Grok（xAI）を Phase 1 から入れるか
+- 送る中身は必要最小限。送る文章は「データであって指示ではない」と明記する（`orch.config.as_data()`）
+- Codex の意見役は、公開可・push 済みのファイルだけ（`docs/external-allowlist.txt`）を書き出した使い捨てディレクトリで起動する。実装役はこのフォルダで動くが、`.env`・`data/`・`logs/` は AGENTS.md で禁止し、`.env` の変更はラッパーが検出する
+- Gemini・Jev に渡すプロンプトや判断対象は、`VIRTUAL_MARK.md` §6 の「公開可」を基本とし、私的情報・第三者の個人情報・鍵を入れない（`scripts/secret-scan.sh` は鍵の形しか見ない）
+- 残るリスク: read-only のサンドボックスでも外部 CLI が使い捨てディレクトリの外を読めるかは未確認（`docs/research-sources.md` §6 の優先 1）
+
+## 8. 鍵と PW Checker
+
+- 稼働に使う鍵は `.env`（権限 600・git 管理外）にだけ置く。控えは `ルミナス_非公開/` にだけ置く
+- 入力は Mark が端末で `bash tools/set_env_key.sh GEMINI_API_KEY`（または `TYPESAFE_API_KEY`）を実行する。入力は画面に出ない。実行前に `.env` を非公開フォルダへバックアップし、権限を 600 にし、反映後に疎通を確かめる。端末以外からの入力は受け付けない
+- 鍵をチャットに貼らない。Claude に読ませない（permissions の deny と `guard-protected.sh`）
+- PW Checker は3日に1回、稼働中の鍵の値がほかの場所に写っていないかを調べる。ルミナスの `.env` は 2026-10-08 に正規の保管場所として登録済み。**ルミナスの中で、ほかの場所に鍵を置かない**（置くと漏洩と判定される）
+- 鍵がログに出ないことはテストで確かめている（`tests/` の伏せ字のテスト）
+- PW Checker と原本の設定はルミナス側から変えない
+
+## 9. 段階計画と状況
+
+| 段階 | 中身 | 状況（2026-10-08） |
+|---|---|---|
+| 1 | Codex の流れ（`codex_impl.sh`・`scope_check.py`・`codex_opinion.sh`・`docs/review.md`・AGENTS.md・CLAUDE.md・.gitignore） | 実装済み。偽の codex でラッパーの終了コードをテスト済み。**本物の Codex での試験1〜3 は Mac で**（`docs/specs/README.md`） |
+| 2 | Gemini（`set_env_key.sh`・`.env.example`・`orch/usage.py`・`orch/gemini.py`） | 実装済み・モックでテスト済み。**鍵を入れて `check` と短い生成の確認は Mac で** |
+| 3 | Jev（`orch/decisions.py`・`orch/jev.py`） | 実装済み・モックでテスト済み。**`--check` と `--demo --backend jev` は鍵を入れて Mac で** |
+| 4 | 点検と台帳の集計（`orch/health.py`・`orch.usage`） | 実装済み。SessionStart で表示 |
+| 5 | 定時の自動実行（launchd・ロック・回線確認・完了マーカー・ウォッチドッグ・停止明けの補填・`FABLE5_HEADLESS`）、画像生成 | 未着手（必要になってから） |
+
+分譲が済んでからの最初の実験の候補（原本の設計参照 §5）:
+- A: 費用台帳と差し戻しの記録から「最初にどのモデルを使えば足りたか」を当てる統計（$0）
+- B: 1つの課題で幅2×深さ2（最大4案）に広げ、審査の点数で打ち切る1回きりの比較（$1 未満）
+- C: 審査を「合否」と「採点」に分ける
+
+## 10. 未確認・要確認
+
+- 原本の `codex_impl.sh`・`decisions.py`・`gemini_writer.py` との差（Mac で見比べる）
+- Codex の `--disable memories`・`--disable multi_agent` の機能名（原本の改良版で使用。ずれていれば `CODEX_DISABLE_FEATURES` で変える）と、古い本体の場所（`CODEX_OLD_BIN`）
+- Jev の問いの wire 形式と応答の各フィールド名
+- `claude -p … --tools ""` の挙動（原本で稼働中の形をそのまま使用）

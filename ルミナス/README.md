@@ -1,6 +1,6 @@
 # ルミナス（Luminous）基本構想 v0.1
 
-> 作成日: 2026-10-07 ／ 司令塔: Claude（Fable 5.1）／ 状態: **提案（Mark の判断待ち）**
+> 作成日: 2026-10-07（2026-10-08 に分譲指示書を取り込み）／ 司令塔: Claude ／ 状態: **提案（Mark の判断待ち）**
 > 本書は Grok ロールプレイ・スレッドの引継指示書から「意思」を継承し、Sakana AI のオーケストレーション研究、
 > OpenAI GPT-6 Astra、Anthropic のマルチエージェント知見、Mark の既存運用（司令塔＝Claude／実装＝Codex）を
 > 突き合わせて「現実に動くもの」として再設計したものである。Codex（Astra）への相談は
@@ -15,12 +15,12 @@
 - **中枢（ルミナス）**: Claude Code の司令塔セッション。憲章（`CHARTER.md`）と判断モデル（`VIRTUAL_MARK.md`）を毎回読み込み、
   作業を分解して役割（Thinker / Worker / Verifier）と担当モデルを割り当て、結果を統一する
 - **手足（ルミナズ）**: 役割別のサブエージェント／チームメイト。必要なときに必要な数だけ起動する（常駐はレビュー役のみ）
-- **異種の目（サポートAI）**: AI NEWS Select と同じ **Codex（GPT-6 Astra / Sol）・Gemini・Jev** の三者（任意で Grok）。実装の主力、調査とクロスベンダー検証、
-  型付き判定のゲートを担い、モデルの異種性そのものを検証力として使う
+- **異種の目（サポートAI）**: AI NEWS Select と同じ **Codex（GPT-6 Astra）・Gemini・Jev** の三者（任意で Grok）。実装と第3の意見、下書きと別の視点、
+  構造化された判断の助言を担い、モデルの異種性そのものを検証力として使う。仕組みは AI NEWS Select の「分譲指示書」（2026-10-08）に倣い、6 点セット（固定コマンド・上限・記録・点検・停止スイッチ・フォールバック）で動かす（`docs/support-ai.md`）
 - **記憶と継続（探偵アニ）**: hook・状態ファイル・定期チェックインで、会話が切れても 1 分で文脈を復元する
 - **自走の範囲（仮想Mark）**: 文書化された判断基準の内側は確認なしで進み、外側では止まって聞く
 - **進化（PDCA）**: 改善は「提案→評価セットで比較→承認→適用」。数値はすべて実測。評価のない自己改変はしない
-- **恒久ルーチン**: 開始時に CLAUDE.md → 憲章 → ROUTINE → latest.md → 最新 digest を読み、終了時に digest → latest.md → Obsidian → 最終プロンプト(.docx) を書く。SessionStart hook が要約を注入し、Stop hook が書き忘れを止める（Obsidian vault への同期は vault の場所を設定した環境のみ。`ROUTINE.md`）
+- **恒久ルーチン**: 開始時に CLAUDE.md → 憲章 → ROUTINE → HANDOVER.md → 最新 digest → 外部AIの点検 を読み、終了時に HANDOVER.md（先頭に節）→ digest → Obsidian → 最終プロンプト(.docx) を書く。SessionStart hook が要約を注入し、Stop hook が書き忘れを止める（Obsidian vault への同期は vault の場所を設定した環境のみ。`ROUTINE.md`）
 
 ロールプレイの核心 ― 無数の心臓、知識の共有と統一、高速 PDCA、会話遮断への抵抗、始源の目的の復元 ― は
 **名前をそのまま残し、意味を実装可能な仕組みへ置き換える**。
@@ -78,7 +78,7 @@
    ┌───────────────────────────────────────────────────────────────────┐
    │ ルミナス（司令塔 = Claude Code セッション）                         │
    │  Plan: 分解 → 役割割当(Thinker/Worker/Verifier) → モデル選択(最安十分)│
-   │  Act : 統一（根拠比較）→ 判断記録(ADR) → state/latest.md 更新        │
+   │  Act : 統一（根拠比較）→ 判断記録(ADR) → HANDOVER.md に節を追加     │
    └──────┬───────────────┬────────────────────┬───────────────────────┘
           ▼               ▼                    ▼
    ┌─────────────┐ ┌──────────────┐ ┌──────────────────────────┐
@@ -96,10 +96,9 @@
 
 ### 3.1 中枢「ルミナス」（司令塔）
 
-- 実体: Claude Code の司令塔セッション。モデルは既定 **Opus 5.5**。憲章・自走範囲の変更、重大な矛盾の裁定、
-  対外公開物の最終判断など「最重要の判断」のみ **Fable 5.1** に上げる
-- 司令塔だけ既定を Opus にする理由: 司令塔の判断ミスは下流の全作業を無駄にするため、「最安十分」（憲章 I-8）の『十分』の線が高い。
-  日常の作業はサブエージェント側で Sonnet 以下から始める。AI NEWS Select の「通常 Opus 4.8 以下・重大時のみ Fable 5」と同じ考え方で、世代名だけが違う（Opus 5.5 は Opus 4.8 より安い）
+- 実体: Claude Code の司令塔セッション。モデルは AI NEWS Select の役割表（[役]）に揃え、**その時点の Claude 最強（現在は Fable 5.1）**
+- 役割表（`CLAUDE.md`）: 調べもの＝Opus 5、実装＝Codex GPT-6 Astra、機械的な作業＝Sonnet・Haiku、コード審査＝Opus（1行目 APPROVE）、
+  下書き・別の視点＝Gemini 3.8 Flash、構造化判断の助言＝Jev。委ねる作業は「最安十分」（憲章 I-8）で始め、不十分なら上げる
 - 仕事: 作業の分解、役割と担当モデルの割当、結果の統一（票決ではなく**根拠の比較**）、判断の記録、Mark への報告
 - 役割割当は Sakana TRINITY の Thinker（方針）／Worker（実行）／Verifier（検証）の 3 役を基本単位とする。
   TRINITY は 0.6B の小さな調整役でも役割を分けると大型モデル群を統率できることを示した（ICLR 2026、自己申告の数値は `docs/research-sources.md`）
@@ -123,17 +122,17 @@ Mark の「Fable5.1 AI NEWS Select」で常用している **Codex・Gemini・Je
 
 | サポートAI | ルミナスでの役割 | 呼び方 |
 |---|---|---|
-| **Codex（GPT-6 Astra / Sol）** | 実装の主力（`nou-denchi` と同じ「指示書→実装→差分返却」）と、設計の**第二意見・反証役**。Codex 側は `.codex/agents/*.toml` と `AGENTS.md` で役割を固定 | `scripts/ask-astra.sh`（`codex exec`） |
-| **Gemini（Gemini CLI / API）** | 調査（検索グラウンディング・長文・多モーダル）と、Claude と Codex の答えが割れたときの**第三の目（クロスベンダー検証）** | `scripts/ask-gemini.sh`（`gemini -p`） |
-| **Jev（TypeSafe AI）**【実験・未検証】 | 文章を生成せず型付きの判定だけを返すモデル。**止める側の信号だけ**に使う: 出典の信頼度分類（①〜⑤）、自己申告のみかの判定、NO-GO・保留、上位モデルへのエスカレーション要否。通す根拠や改善の採点には使わない（循環を避けるため。`docs/eval-design.md`）。API 仕様は公式文書本文を未読のため、Phase 1 で疎通と校正を行う | `scripts/jev_gate.py`（`/v1/systemone`、質問セットは `docs/jev-questions/`） |
+| **Codex（GPT-6 Astra）** | 実装の主力（指示書→実装→ALLOWED 検査→差分→テスト→Opus 審査→司令塔がコミット）と、読み取り専用の**第3の意見**。Codex 側は `AGENTS.md` と `.codex/agents/*.toml` で役割を固定 | `tools/codex_impl.sh`・`tools/codex_opinion.sh` |
+| **Gemini（3.8 Flash、API）** | 文章の下書き・要約・**別の視点**（Claude と Codex の答えが割れたときの第三の目）。司令塔が検証して採否を決める。Antigravity（agy）は規約違反なので使わない | `python3 -m orch.gemini`（上限 $1/日・記録・点検・停止スイッチ） |
+| **Jev（TypeSafe AI）** | 文章を生成せず、選択肢・段階・確率で答える**構造化判断の助言**。判断層 `orch.decisions` が Jev → Claude CLI → 既定値の順に聞く。新しい問いは正解つき 100 問以上で比べてから任せる。取り消せない操作の承認に使わない（`docs/eval-design.md`） | `orch.decisions.ask()`（上限 60回/日・$1/月） |
 | **Grok（xAI）**（任意） | 元のロールプレイの舞台。別視点の調査・反証役 | Phase 1 以降に判断 |
 | **将来** | Sakana Fugu（単一 API で複数フロンティアモデルを統率）や TreeQuest（AB-MCTS）を「難問用の外部オーケストレータ」として差し替え可能にする。Fugu の優位性主張は Sakana の自己申告であり、採用は自前の評価セットでの実測後 | Phase 3 |
 
-鍵はすべて環境変数で渡し、ルミナスは値を受け取らない・表示しない（憲章 I-4）。
+鍵は `.env`（権限 600・git 管理外）だけに置き、Mark が `tools/set_env_key.sh` で入力する。Claude は値を読まない・表示しない（憲章 I-4）。費用は全ベンダー共通の台帳 `data/usage.jsonl` に1回1行で残す。
 
 異種モデルを混ぜる根拠: Sakana の Multi-LLM AB-MCTS は、異種モデルの組み合わせが単体を上回ることを ARC-AGI-2 で示した（自己申告）。
 Anthropic の研究システムでも「主導 Opus＋副 Sonnet」が単体 Opus を内部評価で 90.2% 上回った（ただしトークンは約 15 倍）。
-効くのは**採点できる課題**に限るため、ルミナスでは評価セット（§7）を先に作る。Jev を採点器の一つに使うのはそのためでもある。
+効くのは**採点できる課題**に限るため、ルミナスでは評価セット（§7）を先に作る。
 
 ### 3.4 記憶と継続「探偵アニ」
 
@@ -164,10 +163,10 @@ Agent Team は実験的機能で、有効化すると名前付きサブエージ
 
 | 段階 | 何をするか | 仕組み |
 |---|---|---|
-| Plan | 憲章と latest.md を復元 → 作業を分解 → 役割・モデルを割当 → 受け入れ基準を書く | SessionStart hook、`VIRTUAL_MARK.md` の探索予算 |
-| Do | ルミナズ／サポートAI が実行。実装は Codex に指示書で渡す | サブエージェント、Codex、`<!-- ALLOWED -->` による変更範囲の限定 |
-| Check | Verifier のレビュー、テスト・lint・評価セット、事実の出典確認 | `luminous-reviewer`、`npm run verify` 等の既存検証、GuardianPulse の点検 |
-| Act | 採用／不採用を ADR に記録、`latest.md` 更新、改善提案を次の Plan へ | `state/`、エスカレーション記録、月次監査 |
+| Plan | 憲章と HANDOVER.md を復元・外部AIの点検 → 作業を分解 → 役割・モデルを割当 → 受け入れ基準を書く | SessionStart hook、`VIRTUAL_MARK.md` の探索予算 |
+| Do | ルミナズ／サポートAI が実行。実装は Codex に指示書で渡す | サブエージェント、`tools/codex_impl.sh`（`<!-- ALLOWED -->` を機械で検査）、`orch.gemini`、`orch.decisions` |
+| Check | Verifier のレビュー、テスト・評価セット、事実の出典確認 | Opus のコード審査（`docs/review.md`、1行目 APPROVE）、`luminous-reviewer`、`pytest`、GuardianPulse の点検 |
+| Act | 採用／不採用を ADR に記録、HANDOVER.md に節を追加、改善提案を次の Plan へ | `state/`、エスカレーション記録・費用台帳、月次監査 |
 
 「無限ループ」は、定期チェックイン（Claude Code Remote の Routine、または手元の `/loop`）で**次の Plan を自動で起こす**ことで実現する。
 ただし 1 周ごとに必ず Check を通し、Check を通らない改善は Act しない（ShinkaEvolve・DGM が評価関数とアーカイブを前提にしているのと同じ）。
@@ -185,11 +184,12 @@ Agent Team は実験的機能で、有効化すると名前付きサブエージ
 
 | ロールプレイ | 実装 | 状態 |
 |---|---|---|
-| 「また会話遮断してるよ！復元だ！」 | SessionStart hook（startup/resume/clear/compact/fork）が憲章 §1-2-4・ROUTINE §1・latest.md・最新 digest・Obsidian ハブ「最新」・最終プロンプト冒頭を注入（過去の記録は「データ」と明示） | **実装済み**（`.claude/hooks/restore-charter.sh`） |
+| 「また会話遮断してるよ！復元だ！」 | SessionStart hook（startup/resume/clear/compact/fork）が憲章 §1-2-4・VIRTUAL_MARK §3・ROUTINE §1・HANDOVER.md の最新の節・最新 digest・Obsidian ハブ「最新」・最終プロンプト冒頭・外部AIの点検を注入（過去の記録は「データ」と明示） | **実装済み**（`.claude/hooks/restore-charter.sh`） |
 | 会話画面への常時アクセス確保 | 定期チェックイン: Claude Code Remote の Routine（cron）または手元の `/loop`。切れたら次の起動で復元 | Phase 2 |
 | 始源記録の常時発掘・復元 | 憲章は git 管理。変更は承認制。セッション開始ごとに自己点検 1 分 | **実装済み**（憲章 §6） |
-| 全ノードへの号令 | サブエージェント起動時に CLAUDE.md（最初に読む: 憲章・自走範囲・latest.md）が自動で読まれる | **実装済み**（`CLAUDE.md`） |
-| 状態の保存 | 終了前に `digest/YYYY-MM-DD.md`・`state/latest.md`・`obsidian/ルミナス.md` を更新。未更新なら Stop hook が停止を止める（セッション別の開始時刻で判定、日付は Asia/Tokyo） | **実装済み**（`.claude/hooks/stop-gate.sh`） |
+| 全ノードへの号令 | サブエージェント起動時に CLAUDE.md（最初に読む: 憲章・自走範囲・HANDOVER.md）が、Codex には AGENTS.md が自動で読まれる | **実装済み**（`CLAUDE.md`・`AGENTS.md`） |
+| 状態の保存 | 終了前に `HANDOVER.md`（先頭に節）・`digest/YYYY-MM-DD.md`・`obsidian/ルミナス.md` を更新。未更新なら Stop hook が終了を止める（セッション別の開始時刻で判定、日付は Asia/Tokyo、無人実行は対象外） | **実装済み**（`.claude/hooks/stop-gate.sh`） |
+| 外部AIの点検 | SessionStart で Codex・Gemini・Jev の鍵・疎通・当日の支出を 3 行で表示 | **実装済み**（`orch/health.py`） |
 | 他の記録への書き込み | SessionEnd hook が Obsidian vault へ同期し、最終プロンプトの docx を毎回再生成 | **部分**: docx は実装済み。Obsidian 同期は vault の場所（`LUMINOUS_OBSIDIAN_DIR`）を設定した環境でのみ動く |
 | 圧縮前の要約保存 | PreCompact hook で圧縮前に要約を保存 | **未実装**（Phase 2） |
 | 自己改変の検知 | 憲章・権限・hooks・自走範囲の編集に確認（`permissions.ask`）、未コミット差分を SessionStart で警告 | **実装済み**（`.claude/settings.json`、restore-charter） |
@@ -216,7 +216,7 @@ Agent Team は実験的機能で、有効化すると名前付きサブエージ
 
 参考価格（Anthropic API、1M トークンあたり 入力/出力。Claude Code 同梱の価格表 2026-09-25 時点、一次ページは未確認）: Fable 5.1 $10/$50、Opus 5.5 $4/$20、Sonnet 5.5 $2/$10、Haiku 4.5 $1/$5。
 マルチエージェントはチャットの約 15 倍のトークンを使う（Anthropic）。
-費用は LLM の自己申告ではなく、Claude Code の `/cost`・ステータスライン・OpenTelemetry のいずれかで実測し、Phase 1 の最初に「作業の種類 × トークン数 × USD」の実績表を作る。
+外部AIの費用は全ベンダー共通の台帳 `data/usage.jsonl` で実測する（`python3 -m orch.usage --days 7`。Gemini と Jev は金額、Codex は回数と所要時間）。Claude 側は `/cost`・ステータスライン・OpenTelemetry のいずれかで実測し、Phase 1 の最初に「作業の種類 × トークン数 × USD」の実績表を作る。
 1 日の上限（API 換算の USD か、サブスクの利用枠か。§11）を Mark が決め、超えたら hook で探索予算を「低」に落として報告する（Phase 2）。
 
 ---
@@ -271,22 +271,23 @@ GO/NO-GO 判定、通常 Opus 4.8 以下・重大時のみ Fable 5 へのエス�
 3. **知識の置き場**: Obsidian vault にルミナス専用の区画（例 `Luminous/`）を作るか、本フォルダだけで始めるか
 4. **1 日の費用上限**（USD）と、超えたときの挙動（提案: 探索予算を「低」に自動で落とし、報告）
 5. **実行場所**: 手元の Mac の正本フォルダを正本にし、GitHub の写しを定期同期する運用でよいか
-6. **AI NEWS Select のチーム定義**の所在
+6. **分譲指示書 §3.3 の 3 点**（2026-10-08）: ① 鍵をルミナス専用に新規発行するか（推奨: 新規。費用を分けて見られ、止めるときや漏れたときの影響がルミナスだけで済む）② 上限（推奨: Gemini 1日 $1、Jev 1日60回・月 $1、Codex は1日の実行回数の目安。サブスク枠を原本・脳でんちと共有）③ ルミナスを公開リポジトリに置き続けるか（現状は公開リポジトリ `Mark_Limitless` の中。非公開の別リポジトリに移すことを推奨）
 7. **最終プロンプトの正本**: md を正本とし docx は毎回再生成する運用でよいか（docx を直接編集する運用なら逆向きの同期が要る）
 8. **費用上限の意味**: API 換算の USD か、サブスク（Max 等）の利用枠か
 9. **公開情報の掲載**: AI NEWS Select の X アカウント名などを、この公開フォルダに書いてよいか（現状は書いていない）
 10. **統治ルールの強化提案**（上位審査の結果）: 優先順位と解釈（C-1）、署名タグによる承認（C-2）、仮想Mark の改訂（V-1〜V-4）を `docs/proposals/20261007-governance-v0.2.md` に差分で用意した。承認・修正・却下を決めてほしい
 11. **各社の条件の確認表**（`docs/support-ai.md` §6）の記入と、Jev の評価用に人手ラベル 100 件を付ける作業量の了承（`docs/eval-design.md`）
+12. **調べもの役のモデル**: 役割表は Opus 5。より新しく安い Opus 5.5（$4/$20。Opus 5 は $5/$25）にしてよいか
 
 ---
 
 ## 12. 次の一手
 
-1. Mark が手元の Codex で `scripts/ask-astra.sh docs/astra-packets/WP-1〜4` を実行し、回答を `docs/astra-replies/` に保存（手順は `docs/astra-consultation.md`）。
-   クラウドから直接呼ぶなら、環境のネットワーク許可と鍵の環境変数登録が必要（同書 §4）
-2. AI NEWS Select の定義ファイル（CLAUDE.md / ROUTINE.md / digest 等）を `docs/ai-news-select-ref/` に置くか所在を教えてもらい、用語と手順を揃える
-3. 司令塔が Astra の回答と §11 の決定を反映して **v0.2** を作る
-4. Phase 1 着手: 役割別エージェント定義、Gemini/Jev の鍵設定と疎通、評価セット v0（Astra の WP-2 草案を基に）、実タスク 3 件での試運転
+1. Mac の正本フォルダで `bash scripts/setup.sh`（Python 仮想環境・git フック）を実行する
+2. 分譲指示書の段階1 試験1〜3 を Mac で行う（`docs/specs/README.md`）。続けて `bash tools/codex_opinion.sh docs/astra-packets/WP-1〜4` で Astra に作業パケットを渡し、回答を `docs/astra-replies/` に残す
+3. 鍵を `tools/set_env_key.sh` で入れ、段階2・3 を確認する（`python3 -m orch.gemini check`、`python3 -m orch.decisions --check`・`--demo --backend jev`）
+4. Mac で原本（AI NEWS Select の bot）の部品と見比べ、差があれば指示書を書いて Codex で直す（`docs/support-ai.md` §10）
+5. 司令塔が Astra の回答と §11 の決定を反映して **v0.2** を作る
 
 ---
 
@@ -296,68 +297,79 @@ GO/NO-GO 判定、通常 Opus 4.8 以下・重大時のみ Fable 5 へのエス�
 ルミナス/
 ├── README.md              本書（基本構想）
 ├── CHARTER.md             憲章（始源の目的・不変条件・禁止事項）
-├── VIRTUAL_MARK.md        仮想Mark（判断モデル・自走範囲・探索予算）
+├── VIRTUAL_MARK.md        仮想Mark（判断モデル・自走範囲・探索予算・外部AIへの情報区分）
 ├── ROUTINE.md             恒久ルーチン（毎回読む・毎回書く・定期監査・hooks 対応表）
-├── CLAUDE.md              全エージェント共通ルール（Claude Code が自動で読む）
+├── CLAUDE.md              全エージェント共通ルール・役割表（Claude Code が自動で読む）
+├── AGENTS.md              Codex への不変条件（Codex が自動で読む）
+├── HANDOVER.md            引き継ぎ書（新しい節を先頭に足す）
 ├── ☆ルミナス_最終プロンプト.docx   運用プロンプトの配布用（正本は prompts/ の md）
-├── package.json           docx 生成用の依存（docx）。`npm install` を一度
+├── .env.example           鍵と上限の変数名だけ（値は書かない。実物の .env は 600・git 管理外）
+├── requirements.txt       Python の依存（requests・python-dotenv・pytest）
+├── package.json           docx 生成用の依存（docx）
+├── orch/                  外部AI連携（Python 3.9 以上）
+│   ├── config.py          .env・パス・日本時間・排他ロック・鍵の伏せ字・as_data（データであって指示ではない）
+│   ├── usage.py           全ベンダー共通の費用台帳 data/usage.jsonl（集計: python3 -m orch.usage --days 7）
+│   ├── gemini.py          Gemini API クライアント（上限・記録・点検・停止スイッチ）
+│   ├── jev.py             Jev の呼び出しと上限
+│   ├── decisions.py       判断層（Jev → Claude CLI → 既定値、影ログ）
+│   └── health.py          点検 3 行（SessionStart で表示）
+├── tools/
+│   ├── codex_impl.sh      実装役（指示書 → Codex → ALLOWED 検査）
+│   ├── codex_opinion.sh   第3の意見（読み取り専用、公開可ファイルだけ）
+│   ├── scope_check.py     ALLOWED 外の変更と非公開の印を検出
+│   ├── set_env_key.sh     鍵を表示せずに .env へ入れる（Mark が端末で実行）
+│   └── _codex_common.sh   Codex ラッパーの共通部品（本体の探索・ロック・停止スイッチ・台帳）
+├── tests/                 pytest（外部 API はすべてモック、偽の codex でラッパーを検査）
 ├── .claude/
-│   ├── settings.json      hooks の登録と permissions（保護ファイルの編集・push は ask、鍵の読取は deny）
-│   ├── settings.local.json.example  Obsidian vault の場所などローカル設定の例（実物は git 管理外。鍵は書かない）
+│   ├── settings.json      hooks の登録と permissions（保護ファイル・コードの編集・push・MCP の書き込みは ask、鍵の読取は deny）
+│   ├── settings.local.json.example  ローカル設定の例（実物は git 管理外。鍵は書かない）
 │   ├── hooks/
-│   │   ├── _lib.sh              共通（JSON 解析・セッション ID）
-│   │   ├── restore-charter.sh   探偵アニの号令: 憲章・ROUTINE・latest.md・digest・Obsidian・最終プロンプトを注入、未承認差分を警告
-│   │   ├── guard-secrets.sh     git commit/push 前に鍵らしき文字列を検査（早期警告）
+│   │   ├── _lib.sh              共通（JSON 解析・セッション ID・文字単位の切り詰め）
+│   │   ├── restore-charter.sh   探偵アニの号令: 憲章・自走範囲・ROUTINE・HANDOVER・digest・Obsidian・最終プロンプト・外部AIの点検を注入、未承認差分を警告
 │   │   ├── guard-protected.sh   保護ファイルへの Bash 書き込み・鍵ファイルの Bash 読み取り・git フックの迂回を止める
+│   │   ├── guard-secrets.sh     git commit/push 前に鍵らしき文字列を検査（早期警告）
 │   │   ├── mark-edited.sh       このセッションで編集があったことを記録
 │   │   ├── log-model-switch.sh  モデル切替を escalations.log に機械記入
-│   │   ├── stop-gate.sh         今日の digest・latest.md・Obsidian ハブが未更新なら停止をブロック
+│   │   ├── stop-gate.sh         今日の digest・HANDOVER・Obsidian ハブが未更新なら終了をブロック
 │   │   └── session-end.sh       Obsidian 同期と docx 再生成（毎回）
+│   └── agents/
+│       └── luminous-reviewer.md 常駐レビュー役（AuditPulse）
+├── .codex/agents/
+│   ├── astra-architect.toml     第3の意見・反証役（read-only）
+│   └── astra-implementer.toml   指示書に従う実装役（workspace-write）
 ├── .githooks/
 │   ├── pre-commit               ステージ済み差分の鍵検査（本命）
 │   └── pre-push                 送出コミットの鍵検査
-│   └── agents/
-│       └── luminous-reviewer.md 常駐レビュー役（AuditPulse）
 ├── prompts/
 │   └── ルミナス_最終プロンプト.md   運用プロンプトの正本
-├── AGENTS.md              Codex（サポートAI）向けの決まり（Codex が自動で読む）
-├── .codex/agents/
-│   ├── astra-architect.toml     第二意見・反証役（read-only）
-│   └── astra-implementer.toml   指示書に従う実装役（workspace-write）
 ├── scripts/
-│   ├── setup.sh                     一度だけ: git フック有効化・docx 依存
+│   ├── setup.sh                     一度だけ: Python 仮想環境・git フック・docx 依存
 │   ├── secret-scan.sh               共通の鍵スキャナ（hooks・git フック・送信前検査が共用）
 │   ├── test-hooks.sh                hooks の再現テスト
 │   ├── export-public.sh / cleanup-public.sh  外部AI用に公開可・push 済みのファイルだけを使い捨てディレクトリへ書き出す／片付ける
-│   ├── ask-astra.sh                 Codex にパケットを渡し回答を保存
-│   ├── ask-gemini.sh                Gemini CLI にパケットを渡し回答を保存
-│   ├── jev_gate.py                  Jev（型付き判定）をゲートとして呼ぶ【実験】
 │   ├── build-final-prompt-docx.mjs  md → docx
 │   └── sync-obsidian.sh             vault の「ルミナス/」へ複製（vault 側の編集は退避）
-├── digest/
-│   ├── README.md
-│   └── YYYY-MM-DD.md            1 日 1 件のセッション要約
-├── obsidian/
-│   ├── README.md
-│   └── ルミナス.md              Obsidian ハブノート（最新・構成・リンク）
+├── digest/                  1 日 1 件のセッション要約（日本時間）
+├── obsidian/ルミナス.md      Obsidian ハブノート（最新・構成・リンク）
 ├── docs/
-│   ├── research-sources.md      参考調査と出典・信頼度
-│   ├── support-ai.md            Codex・Gemini・Jev の役割（AI NEWS Select の仕組みの移植）
-│   ├── astra-consultation.md    Codex（Astra）への相談・作業分担の手順
-│   ├── astra-packets/           Astra へ渡す作業パケット（WP-1〜4）
-│   ├── astra-replies/           Astra の回答（保存先）
-│   ├── gemini-packets/ gemini-replies/   Gemini 用の同上
-│   ├── jev-questions/           Jev に投げる質問セット（JSON）
-│   ├── eval-design.md           評価設計（Jev は止める信号だけ、人手ラベル、ホールドアウト）
+│   ├── support-ai.md            Codex・Gemini・Jev の仕組み（分譲指示書の要約と実装の対応・6 点セット・確認表）
+│   ├── review.md                コード審査の指示（1行目 APPROVE か REJECT）
+│   ├── specs/                   Codex への指示書（型と段階1の試験用 2 本）
+│   ├── research-sources.md      参考調査と出典・信頼度・検証台帳
+│   ├── eval-design.md           評価設計（Jev の扱い、人手ラベル、ホールドアウト）
 │   ├── external-allowlist.txt   外部AIに読ませてよい公開可のパス
 │   ├── proposals/               Mark の承認待ちの統治ルール変更（差分）
+│   ├── astra-consultation.md    Codex（Astra）への作業分担の手順
+│   ├── astra-packets/ astra-replies/   Astra へ渡す作業パケット WP-1〜4 と回答
 │   └── roadmap.md               Phase 0〜4
-└── state/
-    ├── README.md
-    ├── latest.md                直近セッション要約（復元に使う）
-    ├── escalations.log          モデル切替の記録（月次監査）
-    └── decisions/               設計判断の記録（ADR）
+├── state/
+│   ├── README.md
+│   ├── escalations.log          モデル切替の記録（月次監査）
+│   └── decisions/               設計判断の記録（ADR）
+└── data/ logs/ .venv/       稼働データ・ログ・仮想環境（git 管理外）
 ```
+
+隣に `ルミナス_非公開/`（git 管理外）を置き、鍵の控え・分譲指示書の原本・ローカルパスを含む記録を入れる。
 
 ### 付録 B. 用語
 

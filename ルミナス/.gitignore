@@ -1,6 +1,7 @@
 # 秘匿情報・ローカル設定（憲章 I-4）
 .env
 .env.*
+!.env.example
 *.key
 *.pem
 *.p8
@@ -26,3 +27,9 @@ __pycache__/
 docs/*-replies/*.err
 # セッション別の一時ファイル
 state/.sessions/
+
+# 分譲指示書 §4: 稼働データ・ログ・仮想環境（git の管理外）
+data/
+logs/
+.venv/
+.pytest_cache/

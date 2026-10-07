@@ -53,7 +53,7 @@
 
 - `Mark555Limitless/nou-denchi` の `CLAUDE.md` / `AGENTS.md`: 司令塔＝Claude、実装＝Codex（指示書・`<!-- ALLOWED -->` で変更範囲を限定・git とネットワーク禁止）、`npm run verify` で検証、コード審査はモデル明示で APPROVE 後にコミット
 - Obsidian vault: 共通知識の置き場として指定されている（ルミナス用の区画 `ルミナス/` を分けて同期する）
-- 「Fable5.1 AI NEWS Select」の AI チーム（Mark の X アカウントで運用）: Codex・Gemini・Jev を常用。本人指示（出典ピラミッド・サブ LLM 深掘り検証・GO/NO-GO・エスカレーション）から規則は把握できたが、定義ファイルの所在は未確認（Notion・Drive・両リポジトリに無し。Gmail は再認証が必要で未検索）
+- 「Fable5 AI NEWS Select」の AI チーム（Mark の X アカウントで運用）: Codex・Gemini・Jev を常用。仕組みは 2026-10-08 に AI NEWS Select の司令塔が書いた「ルミナス分譲指示書」で受け取った（原本はローカルパスを含むため非公開フォルダで保管、要約は `docs/support-ai.md`）。指示書に載っている稼働中の形は、検証台帳で〔Mark の稼働実績〕として扱う
 
 ## 5. 利益相反の注記
 
@@ -62,18 +62,18 @@ Sakana Fugu と GPT-6 Astra の優位性主張は、いずれも開発元の自�
 
 ## 6. 検証台帳（未検証の外部事実）
 
-本文中の事実にはラベルを付ける: 〔一次確認 日付〕〔二次のみ〕〔未確認〕〔自己申告〕。未確認の事実に頼る処理は、失敗したら止まる側に倒す。
+本文中の事実にはラベルを付ける: 〔一次確認 日付〕〔Mark の稼働実績〕〔二次のみ〕〔未確認〕〔自己申告〕。〔Mark の稼働実績〕は、AI NEWS Select の原本で実際に動いている形（分譲指示書 2026-10-08 に記載）を指す。未確認の事実に頼る処理は、失敗したら止まる側に倒す。
 確認の優先順位は「設計への依存度 × 外れたときの損害 × 確認の手軽さ」で決めた（上位審査 2026-10-07）。
 
 | 優先 | 主張 | ラベル | 依存箇所 | 確認方法 | 確認日 |
 |---|---|---|---|---|---|
-| 1 | `codex exec` のオプション（`-C`・`-s read-only`・`--skip-git-repo-check`・`-m`）と、read-only での読み取り範囲 | オプションは〔一次確認 2026-10-07〕（codex-cli 0.161.0 の `--help`）。読み取り範囲は〔未確認〕 | scripts/ask-astra.sh | Mac で `codex exec --help`、read-only で ROOT 外のファイルを読めるか実験 | |
-| 2 | Gemini CLI の非対話実行の承認モード・サンドボックス指定 | 〔二次のみ〕（README の `-p`・`-m` は確認、承認モードは未確認） | scripts/ask-gemini.sh | `gemini --help` | |
+| 1 | `codex exec` のオプション（`-C`・`-s`・`--skip-git-repo-check`・`-m`・`-o`・`--disable`）と、read-only での読み取り範囲 | オプションは〔一次確認 2026-10-07〕（codex-cli 0.161.0 の `--help`）。読み取り範囲は〔未確認〕 | tools/codex_impl.sh・tools/codex_opinion.sh | Mac で `codex exec --help`、read-only で ROOT 外のファイルを読めるか実験 | |
+| 2 | Gemini API の `thinkingConfig.thinkingLevel`・`x-goog-api-key`・価格（$0.75／$3.75、2027-01 から $1.50／$7.50） | 〔Mark の稼働実績〕（分譲指示書・原本で稼働中） | orch/gemini.py | Mac で `python3 -m orch.gemini check` と短い生成 | |
 | 3a | Claude Code の PostModelSwitch hook | イベントの存在は〔一次確認 2026-10-07〕（hooks 公式文書の一覧）。入力の `from_model`/`to_model` は〔未確認〕 | .claude/hooks/log-model-switch.sh | 実際に `/model` を切り替えて escalations.log を確認 | |
 | 3b | `Edit(/CHARTER.md)` の ask が実際に確認を出すか。リダイレクトは Edit 規則の対象、`sed -i` は対象外 | リダイレクトの扱いは〔一次確認 2026-10-07〕（permissions 公式文書）。実地は〔未確認〕 | .claude/settings.json、guard-protected.sh | このフォルダで起動し CHARTER.md を Edit してみる | |
 | 3c | bypass・auto モードで ask と PreToolUse hook がどう動くか | 〔未確認〕 | 統治全体 | 実地テスト 1 回 | |
-| 4 | Jev の API（`/v1/systemone`、OpenRouter `/api/alpha/decisions`）・認証・価格・データ条項 | 〔二次のみ〕（コミュニティの実例と SDK README）。価格は〔自己申告〕 | scripts/jev_gate.py | `--dry-run` の後、公開文書 1 件で疎通 | |
-| 5 | GPT-6 Astra／Sol のモデル ID と Mark のプランでの可否。TOML のエージェントを `codex exec` から名前で呼べるか | 〔二次のみ〕 | ask-astra.sh、.codex/agents | Mac の Codex で確認 | |
+| 4 | Jev の API（`/v1/systemone`、`Bearer`、`{"state": 文字列, "model": "jev-latest", "questions"}`） | 送り先と本文の形は〔Mark の稼働実績〕（分譲指示書）。問いの wire 形式は〔二次のみ〕。価格は〔自己申告〕 | orch/jev.py・orch/decisions.py | Mac で `python3 -m orch.decisions --demo --backend jev` | |
+| 5 | GPT-6 Astra のモデル ID（gpt-6-astra）とフォールバック（gpt-5.6-sol）。TOML のエージェントを `codex exec` から名前で呼べるか | モデル ID は〔Mark の稼働実績〕（分譲指示書）。TOML の呼び出しは〔未確認〕 | tools/codex_*.sh、.codex/agents | Mac の Codex で確認 | |
 | 6 | Sakana の TRINITY／Conductor／Fugu の記述 | 〔二次のみ〕（Fugu README は一次確認） | README §3・§10（着想のみ） | Phase 3 で論文本文 | |
 
 この台帳は四半期の見直し（ROUTINE §4）で更新する。

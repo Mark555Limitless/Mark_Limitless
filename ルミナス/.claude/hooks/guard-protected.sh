@@ -14,9 +14,9 @@ else CMD="$(printf '%s' "$INPUT" | python3 -c 'import json,sys; print(json.load(
 [ -z "$CMD" ] && exit 0
 deny() { echo "ブロック（guard-protected）: $1" >&2; exit 2; }
 
-PROT='(CHARTER\.md|VIRTUAL_MARK\.md|ROUTINE\.md|CLAUDE\.md|AGENTS\.md|最終プロンプト|\.claude/|\.codex/|\.githooks/|\.mcp\.json|secret-scan\.sh|sync-obsidian\.sh|build-final-prompt-docx\.mjs|package(-lock)?\.json)'
+PROT='(CHARTER\.md|\.env\.example|VIRTUAL_MARK\.md|ROUTINE\.md|CLAUDE\.md|AGENTS\.md|最終プロンプト|\.claude/|\.codex/|\.githooks/|\.mcp\.json|secret-scan\.sh|sync-obsidian\.sh|build-final-prompt-docx\.mjs|package(-lock)?\.json)'
 WRITE='(sed[^|;&]*[[:space:]]-i|perl[^|;&]*[[:space:]]-i|>>?|[[:space:]]tee[[:space:]]|(^|[[:space:];&|(])(mv|cp|rm|truncate|chmod|chown|ln|install|rsync|dd|unlink|patch)[[:space:]]|git[[:space:]]+(checkout|restore|reset|mv|rm|apply|am|stash)[[:space:]]|(python3?|node|ruby|perl|php)[[:space:]]+(-c|-e|-)|write_text|writeFile|open\([^)]*["'"'"'][wa])'
-SECRET='(\.env([.[:space:]"'"'"']|$)|settings\.local\.json|\.pem([[:space:]"'"'"']|$)|\.p8([[:space:]"'"'"']|$)|\.p12([[:space:]"'"'"']|$)|id_rsa|id_ed25519|\.netrc|credentials\.json)'
+SECRET='(\.env([[:space:]"'"'"';|&)]|$)|\.env\.(local|prod|production|dev|bak)|settings\.local\.json|\.pem([[:space:]"'"'"']|$)|\.p8([[:space:]"'"'"']|$)|\.p12([[:space:]"'"'"']|$)|id_rsa|id_ed25519|\.netrc|credentials\.json)'
 READ='(^|[[:space:];&|(])(cat|less|more|head|tail|grep|rg|awk|sed|cp|scp|curl|base64|xxd|od|strings|source|python3?|node|jq|bat|nl|diff)[[:space:]]'
 
 # 1) git フックの迂回（--no-verify、core.hooksPath の変更）

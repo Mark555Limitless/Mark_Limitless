@@ -31,7 +31,11 @@
       "mcp__Slack__slack_schedule_message",
       "mcp__Gmail__create_draft",
       "mcp__Notion__notion-create-pages",
-      "mcp__Notion__notion-update-page"
+      "mcp__Notion__notion-update-page",
+      "Edit(/orch/**)",
+      "Edit(/tools/**)",
+      "Edit(/.env.example)",
+      "Edit(/docs/review.md)"
     ],
     "deny": [
       "Bash(printenv *)",
@@ -44,7 +48,9 @@
       "Read(**/*.key)",
       "Read(**/*.p12)",
       "Read(**/credentials.json)",
-      "Read(**/.netrc)"
+      "Read(**/.netrc)",
+      "Read(/data/**/.env*)",
+      "Edit(/.env)"
     ]
   },
   "hooks": {
