@@ -30,11 +30,16 @@ hook_nested_git() {
 hook_codex_unsettled() { [ -e "$ROOT/data/.codex_violation" ] || [ -d "$ROOT/data/codex_runs/.lock" ]; }
 # hooks が使う git。裸のリポジトリとしての発見と fsmonitor を止める（safe.bareRepository は git 2.38 以降。古い git は無視する）
 hook_git() { git -c safe.bareRepository=explicit -c core.fsmonitor=false "$@"; }
-# Codex が書けない置き場（tools/_codex_common.sh の安全な置き場と同じ。作業フォルダ・/tmp の外）
+# Codex が書けない置き場（tools/_codex_common.sh の安全な置き場と同じ。作業フォルダ・/tmp・$TMPDIR の外であることを確かめる）
 hook_cache_dir() {
-  local base="${LUMINOUS_SAFE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/luminous-codex}"
-  mkdir -p "$base" 2>/dev/null && chmod 700 "$base" 2>/dev/null
-  printf '%s' "$base"
+  local base="${LUMINOUS_SAFE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/luminous-codex}" real t tr
+  mkdir -p "$base" 2>/dev/null && chmod 700 "$base" 2>/dev/null || return 1
+  real="$(cd "$base" 2>/dev/null && pwd -P)" || return 1
+  for t in "$ROOT" /tmp /private/tmp /var/tmp "${TMPDIR:-/tmp}"; do
+    tr="$(cd "$t" 2>/dev/null && pwd -P)" || continue
+    case "$real/" in "$tr"/*) return 1 ;; esac
+  done
+  printf '%s' "$real"
 }
 # モデル名は英数字と ._:@?- だけにする（記録は公開されるので、パスや任意の文字列を入れない）
 hook_model_name() { printf '%s' "${1:-?}" | tr -c 'A-Za-z0-9._:@?-' '_' | cut -c1-80; }
@@ -42,11 +47,17 @@ hook_model_name() { printf '%s' "${1:-?}" | tr -c 'A-Za-z0-9._:@?-' '_' | cut -c
 ESC_LINE_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z \| \(作業名を追記\) \| [A-Za-z0-9._:@?_-]{1,80} \| [A-Za-z0-9._:@?_-]{1,80} \| \(理由を追記\) \| \(結果を追記\)$'
 # Codex の実行中に保留したモデル切替の記録（Codex が書けない置き場）を state/escalations.log へ移す。書式に合わない行は捨てる
 hook_flush_escalations() {
-  local pend; pend="$(hook_cache_dir)/escalations.pending"
+  local dir pend total good
+  dir="$(hook_cache_dir)" || return 0   # 置き場が安全でなければ、そこにある保留は信用せず移さない
+  pend="$dir/escalations.pending"
   [ -s "$pend" ] || return 0
   hook_codex_running && return 0
+  total="$(grep -c '' "$pend" 2>/dev/null)"; good="$(grep -cE "$ESC_LINE_RE" "$pend" 2>/dev/null)"   # 一致 0 件でも 0 を出す（終了コードは 1）
+  total="${total:-0}"; good="${good:-0}"
   grep -E "$ESC_LINE_RE" "$pend" >> "$ROOT/state/escalations.log"
   rm -f "$pend"
+  [ "$total" -gt "$good" ] 2>/dev/null && echo "保留していたモデル切替の記録のうち、書式に合わない $((total - good)) 行を捨てました（中身は表示しない）"
+  return 0
 }
 # 文字単位で各行を N 文字に切る（cut -c は C ロケールでバイト単位になり、日本語を壊すため使わない）
 hook_trunc() {

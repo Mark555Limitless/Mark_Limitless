@@ -2,9 +2,11 @@
 # hooks・スキャナ・同期の再現テスト（憲章 I-3: 実測を再現可能に）。使い捨てディレクトリだけに書き込む。
 set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-T="${TMPDIR:-/tmp}/luminous-test-$$"; mkdir -p "$T"; trap 'rm -rf "$T"' EXIT
+T="${TMPDIR:-/tmp}/luminous-test-$$"; mkdir -p "$T"
+SAFE_TEST="$HOME/.cache/luminous-hooktest-$$"   # 保留の置き場は /tmp の外でなければ使われない
+trap 'rm -rf "$T" "$SAFE_TEST"' EXIT
 pass=0; fail=0
-export LUMINOUS_SAFE_DIR="$T/cache"   # Codex が書けない置き場（保留中の記録など）をテスト用に差し替える
+export LUMINOUS_SAFE_DIR="$SAFE_TEST"   # Codex が書けない置き場（保留中の記録など）をテスト用に差し替える
 # 偽の鍵は実行時に組み立てる（ファイル本文に鍵の形を置かない。置くと自分の pre-commit に止められる）
 FAKE_KEY="sk""-FAKEFAKEFAKEFAKEFAKEFAKE1234567"
 ok() { pass=$((pass+1)); echo "PASS $1"; }
@@ -135,8 +137,9 @@ printf '%s' '{"from_model":"b","to_model":"c"}' | bash "$R/.claude/hooks/log-mod
 # 11) 4回目の審査: 保留の記録は機械的な書式の行だけ移す・モデル名の無害化・Stop ゲートの開始時刻の検証
 PRIV="/Us""ers/someone/secret"
 printf '2026-10-08T00:00:00Z | x | %s\n' "$PRIV" > "$PEND"
-printf '%s' '{"from_model":"c","to_model":"d"}' | bash "$R/.claude/hooks/log-model-switch.sh" >/dev/null 2>&1
+OUT="$(printf '%s' '{"from_model":"c","to_model":"d"}' | bash "$R/.claude/hooks/log-model-switch.sh" 2>&1)"
 ! grep -q "$PRIV" "$ESC" && [ ! -e "$PEND" ] && ok "model-switch: 書式に合わない保留行（非公開の印）は公開の記録へ移さない" || ng "model-switch: 不正な保留行"
+printf '%s' "$OUT" | grep -q '1 行を捨てました' && ! printf '%s' "$OUT" | grep -q "$PRIV" && ok "model-switch: 捨てた行数だけを知らせる（中身は出さない）" || ng "model-switch: 捨てた行数の表示"
 printf '%s' "{\"from_model\":\"x$PRIV\",\"to_model\":\"e f\"}" | bash "$R/.claude/hooks/log-model-switch.sh" >/dev/null 2>&1
 ! grep -q "$PRIV" "$ESC" && tail -n 1 "$ESC" | grep -q '| e_f |' && ok "model-switch: モデル名のパスや空白を無害化" || ng "model-switch: モデル名の無害化"
 sleep 1
@@ -147,6 +150,14 @@ printf '%s' "$OUT" | grep -q '"block"' && ok "stop-gate: 開始時刻が数字�
 echo 99999999999 > "$R/state/.sessions/test-3.start"
 OUT="$(printf '%s' '{"session_id":"test-3","stop_hook_active":false}' | bash "$R/.claude/hooks/stop-gate.sh")"
 printf '%s' "$OUT" | grep -q '"block"' && ok "stop-gate: 未来の開始時刻は使わない" || ng "stop-gate: 未来の開始時刻"
+
+# 12) 5回目の審査（任意の軽）: 保留の置き場が作業フォルダや /tmp の中なら保留しない
+mkdir -p "$R/data/codex_runs/.lock"; echo "$$ 0" > "$R/data/codex_runs/.lock/owner"
+OUT="$(printf '%s' '{"from_model":"f","to_model":"g"}' | LUMINOUS_SAFE_DIR="$R/unsafe" bash "$R/.claude/hooks/log-model-switch.sh" 2>&1)"
+[ ! -e "$R/unsafe/escalations.pending" ] && printf '%s' "$OUT" | grep -q '保留できませんでした' && ok "model-switch: 作業フォルダ内の置き場には保留しない" || ng "model-switch: 安全でない置き場"
+OUT="$(printf '%s' '{"from_model":"f","to_model":"g"}' | LUMINOUS_SAFE_DIR="$T/unsafe" bash "$R/.claude/hooks/log-model-switch.sh" 2>&1)"
+[ ! -e "$T/unsafe/escalations.pending" ] && printf '%s' "$OUT" | grep -q '保留できませんでした' && ok "model-switch: /tmp の中の置き場には保留しない" || ng "model-switch: /tmp の置き場"
+rm -rf "$R/data/codex_runs/.lock" "$R/unsafe"
 
 echo "---- $pass passed, $fail failed"
 [ "$fail" = 0 ]
