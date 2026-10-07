@@ -50,22 +50,45 @@ make_safe_dir() {
     tr="$(cd "$t" 2>/dev/null && pwd -P)" || continue
     case "$real/" in "$tr"/*) echo "安全な置き場 $real が Codex の書ける場所の中です（LUMINOUS_SAFE_DIR で変える）" >&2; return 1;; esac
   done
+  # 強制終了（SIGKILL 等）で残った古い置き場（1日以上前）を片付ける
+  find "$real" -maxdepth 1 -name 'run.??????' -type d -mmin +1440 -exec rm -rf {} + 2>/dev/null
   mktemp -d "$real/run.XXXXXX"
 }
 remove_safe_dir() { case "$1" in */luminous-codex*/run.*|*/run.??????) rm -rf -- "$1";; esac; }
 
-# 同時に2本以上走らせない（ディレクトリ作成は原子的）。持ち主のプロセスが死んでいれば回収する
+# 同時に2本以上走らせない（ディレクトリ作成は原子的）。持ち主のプロセスが死んでいるときだけ回収する
+# （時間では回収しない。長い実行のロックを奪うと2本が同時に走るため）。持ち主の記録が無いロックも回収しない
 LOCK_DIR="$PROJ/data/codex_runs/.lock"
+_write_owner() { printf '%s %s\n' "$$" "$(date +%s)" > "$LOCK_DIR/owner"; }
+lock_owner() { cut -d' ' -f1 "$LOCK_DIR/owner" 2>/dev/null; }
+lock_held_by_live() { local pid; pid="$(lock_owner)"; [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }
 acquire_lock() {
   mkdir -p "$PROJ/data/codex_runs"
-  if mkdir "$LOCK_DIR" 2>/dev/null; then printf '%s %s\n' "$$" "$(date +%s)" > "$LOCK_DIR/owner"; return 0; fi
-  local pid; pid="$(cut -d' ' -f1 "$LOCK_DIR/owner" 2>/dev/null)"
-  if { [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; } || [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +120 2>/dev/null)" ]; then
-    echo "古いロックを回収します（持ち主 ${pid:-不明} は動いていません）" >&2
-    rm -rf "$LOCK_DIR"
-    mkdir "$LOCK_DIR" 2>/dev/null && { printf '%s %s\n' "$$" "$(date +%s)" > "$LOCK_DIR/owner"; return 0; }
+  if mkdir "$LOCK_DIR" 2>/dev/null; then _write_owner; return 0; fi
+  local pid stale; pid="$(lock_owner)"
+  if [ -z "$pid" ]; then
+    echo "ロックに持ち主の記録がありません。実行中でないことを確かめてから data/codex_runs/.lock を削除してください" >&2; return 1
   fi
+  kill -0 "$pid" 2>/dev/null && { echo "別の Codex が実行中です（PID $pid）" >&2; return 1; }
+  # 2本が同時に回収しようとしても、mv は1本だけが成功する。動かした後に持ち主が同じか確かめる
+  stale="$LOCK_DIR.stale.$$"; rm -rf "$stale"
+  mv "$LOCK_DIR" "$stale" 2>/dev/null || return 1
+  if [ "$(cut -d' ' -f1 "$stale/owner" 2>/dev/null)" != "$pid" ]; then
+    mv "$stale" "$LOCK_DIR" 2>/dev/null; return 1   # 直前に別の実行が取り直していた
+  fi
+  rm -rf "$stale"
+  echo "古いロックを回収しました（持ち主 PID $pid は動いていません。前回の実行は途中で止まった可能性があるので、差分を確認すること）" >&2
+  mkdir "$LOCK_DIR" 2>/dev/null && { _write_owner; return 0; }
   return 1
 }
-release_lock() { [ "$(cut -d' ' -f1 "$LOCK_DIR/owner" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK_DIR"; return 0; }
+release_lock() { [ "$(lock_owner)" = "$$" ] && rm -rf "$LOCK_DIR"; return 0; }
+
+# 実行で生じる __pycache__・.pytest_cache を種類を問わず消す（仕込まれた .pyc を後で読み込まないため。リンクはリンクだけ消える）
+clean_artifacts() { find "$PROJ" \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} + 2>/dev/null; return 0; }
+
+# Codex の実行後に使う git。発見（入れ子の .git）を使わず、本物の GITDIR を明示し、設定に仕込めるコマンドを止める
+sgit() {
+  GIT_DIR="$LUM_GITDIR" GIT_WORK_TREE="$LUM_TOPLEVEL" GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
+    git --no-pager -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat "$@"
+}
 now_ms() { local s; s="$(date +%s%N 2>/dev/null)"; case "$s" in *N|'') echo $(( $(date +%s) * 1000 ));; *) echo $(( s / 1000000 ));; esac; }

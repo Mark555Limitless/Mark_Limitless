@@ -3,13 +3,19 @@
 
 codex_impl.sh はこのファイルを Codex が書けない場所へ写してから、`python3 -I -S` で実行する。
 git の見え方（未追跡・ignore・commit・rename・引用符つきのパス）に頼らず、内容のハッシュで比べる。
+git を1回も実行しないうちに入れ子の .git を探して隔離する（.git の設定に仕込まれたコマンドを走らせないため）。
 
 使い方:
-  scope_check.py allowed  <指示書.md>                       ALLOWED を1行1件で出す（無ければ終了 2）
-  scope_check.py snapshot <root> <出力.json>                 ファイルの一覧・ハッシュ・（小さい文章は）内容を記録
-  scope_check.py count    <root> <before.json>               変更の件数を出す
-  scope_check.py compare  <root> <before.json> <allowed.txt> ALLOWED 外の変更と非公開の印を検査（0=OK / 3=NG）
-  scope_check.py ledger   --data-dir D --vendor codex ...    費用台帳に1行足す（orch.usage と同じ形式・同じロック）
+  scope_check.py allowed  <指示書.md>                        ALLOWED を1行1件で出す（無ければ終了 2）
+  scope_check.py nested-git <root>                           作業フォルダ内の .git を探す（あれば終了 3。root/.git は上位に .git が無いときだけ除く）
+  scope_check.py snapshot <root> <出力.json>                  ファイルの一覧・種類・権限・ハッシュ・（小さい文章は）内容を記録
+  scope_check.py count    <root> <before.json>                変更の件数を出す
+  scope_check.py quarantine-git <root> <before.json> <隔離先>  実行後に現れた .git を作業フォルダの外へ移す（見つかれば終了 3）
+  scope_check.py compare  <root> <before.json> <allowed.txt>  ALLOWED 外の変更と非公開の印を検査（0=OK / 3=NG）
+  scope_check.py gitfp    <gitdir>                            本物の GITDIR の config・hooks・info/attributes のハッシュ
+  scope_check.py fsum     <path>                              1ファイルの種類・権限・ハッシュ（FIFO 等は開かない）
+  scope_check.py ledger   --data-dir D --vendor codex ...     費用台帳に1行足す（orch.usage と同じ形式・同じロック）
+snapshot・count・quarantine-git・compare は --real-gitdir <GITDIR> を受け取り、本物の .git は比べない。
 """
 from __future__ import annotations
 
@@ -21,17 +27,39 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import stat
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 # 非公開の印（変えない）。追加行にこれが入ったら止める
 PRIVATE_MARKERS = ("/Users/", "_非公開")
-SKIP_DIRS = {".git"}
-ARTIFACT_DIRS = {"__pycache__", ".pytest_cache"}  # 比べずに、実行後に削除する
+ARTIFACT_DIRS = {"__pycache__", ".pytest_cache"}  # 本物のディレクトリなら比べずに実行後に削除。リンクやファイルなら違反
 HEAVY_TOP = {".venv", "node_modules", "data", "logs"}  # ハッシュだけ記録する
 CONTENT_MAX = 2_000_000
 JST = timezone(timedelta(hours=9))
+# Codex の実行中に司令塔・orch・hooks が書く記録（追記だけなら許す。実行可能・リンク・追記以外の変更は違反）
+APPEND_ONLY = {"data/usage.jsonl", "data/decisions_shadow.jsonl", "state/.session-end.log", "state/escalations.log"}
+APPEND_GLOBS = ("logs/*.log",)
+# 中身を問わない印のファイル（ロック・セッションの開始印・停止スイッチ）。通常のファイルで実行権限が無ければ許す。削除は違反
+MARKER_GLOBS = ("data/*.lock", "logs/*.lock", "state/.sessions/*", "data/.*_disabled")
+
+
+def _open_regular(path: str):
+    """リンクをたどらず、FIFO 等で止まらないように開く。通常のファイルでなければ None。"""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            return None
+    except OSError:
+        os.close(fd)
+        return None
+    return os.fdopen(fd, "rb")
 
 
 def _no_content(rel: str) -> bool:
@@ -41,42 +69,238 @@ def _no_content(rel: str) -> bool:
     return rel.split("/", 1)[0] in HEAVY_TOP
 
 
-def snapshot(root: str) -> Dict[str, dict]:
+def _rel(root: str, full: str) -> str:
+    return os.path.normpath(os.path.relpath(full, root)).replace(os.sep, "/")
+
+
+def _git_entry(full: str) -> dict:
+    """.git（ディレクトリ・ファイル・リンク）を、中身の要所（HEAD・config・commondir）のハッシュで表す。"""
+    try:
+        st = os.lstat(full)
+    except FileNotFoundError:
+        return {"t": "git", "v": "none"}
+    if stat.S_ISLNK(st.st_mode):
+        return {"t": "git", "v": "link:" + os.readlink(full)}
+    h = hashlib.sha256()
+    if stat.S_ISDIR(st.st_mode):
+        for name in ("HEAD", "config", "commondir", "gitdir"):
+            fh = _open_regular(os.path.join(full, name))
+            if fh is not None:
+                with fh:
+                    h.update(name.encode() + b"\0" + fh.read(1 << 20))
+        return {"t": "git", "v": "dir:" + h.hexdigest()}
+    fh = _open_regular(full)
+    if fh is not None:
+        with fh:
+            h.update(fh.read(1 << 20))
+        return {"t": "git", "v": "file:" + h.hexdigest()}
+    return {"t": "git", "v": "special:%o" % st.st_mode}
+
+
+def _is_real_git(full: str, real_git: str) -> bool:
+    return bool(real_git) and not os.path.islink(full) and os.path.realpath(full) == real_git
+
+
+def snapshot(root: str, real_gitdir: str = "") -> Dict[str, dict]:
+    """ファイルの一覧（種類・権限・ハッシュ）と、小さい文章の内容。FIFO などは開かない。"""
     files: Dict[str, dict] = {}
     contents: Dict[str, str] = {}
     root = os.path.abspath(root)
+    real_git = os.path.realpath(real_gitdir) if real_gitdir else ""
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        rel_dir = os.path.relpath(dirpath, root)
         keep = []
         for d in dirnames:
             full = os.path.join(dirpath, d)
-            rel = os.path.normpath(os.path.join(rel_dir, d)).replace(os.sep, "/")
-            if d in SKIP_DIRS or d in ARTIFACT_DIRS:
+            rel = _rel(root, full)
+            if d == ".git":
+                if not _is_real_git(full, real_git):
+                    files[rel] = _git_entry(full)  # 本物の GITDIR は比べない（config・hooks は gitfp、HEAD は codex_impl.sh が確かめる）
                 continue
-            if os.path.islink(full):
-                files[rel] = {"t": "link", "v": os.readlink(full)}
+            if os.path.islink(full):  # リンクの判定を先に行う（__pycache__ のリンクを見逃さない）
+                files[rel] = {"t": "badartifact" if d in ARTIFACT_DIRS else "link", "v": os.readlink(full)}
+                continue
+            if d in ARTIFACT_DIRS:
                 continue
             keep.append(d)
         dirnames[:] = keep
         for f in filenames:
             full = os.path.join(dirpath, f)
-            rel = os.path.normpath(os.path.join(rel_dir, f)).replace(os.sep, "/")
-            if os.path.islink(full):
-                files[rel] = {"t": "link", "v": os.readlink(full)}
+            rel = _rel(root, full)
+            try:
+                st = os.lstat(full)
+            except FileNotFoundError:
+                continue
+            if f == ".git":
+                files[rel] = _git_entry(full)
+                continue
+            if stat.S_ISLNK(st.st_mode):
+                files[rel] = {"t": "badartifact" if f in ARTIFACT_DIRS else "link", "v": os.readlink(full)}
+                continue
+            if f in ARTIFACT_DIRS:
+                files[rel] = {"t": "badartifact", "v": "file"}
+                continue
+            fh = _open_regular(full) if stat.S_ISREG(st.st_mode) else None
+            if fh is None:
+                files[rel] = {"t": "special", "v": "%o" % st.st_mode}  # FIFO・ソケット・デバイスは読まない
                 continue
             h = hashlib.sha256()
             size = 0
             buf = b""
-            with open(full, "rb") as fh:
+            with fh:
+                mode = stat.S_IMODE(os.fstat(fh.fileno()).st_mode)
                 for chunk in iter(lambda: fh.read(1 << 20), b""):
                     h.update(chunk)
                     size += len(chunk)
                     if size <= CONTENT_MAX:
                         buf += chunk
-            files[rel] = {"t": "file", "h": h.hexdigest(), "n": size}
+            files[rel] = {"t": "file", "h": h.hexdigest(), "n": size, "m": mode}
             if size <= CONTENT_MAX and b"\0" not in buf and not _no_content(rel):
                 contents[rel] = buf.decode("utf-8", "replace")
     return {"files": files, "contents": contents}
+
+
+def _has_git_above(root: str) -> bool:
+    d = os.path.dirname(os.path.abspath(root))
+    while True:
+        if os.path.lexists(os.path.join(d, ".git")):
+            return True
+        nd = os.path.dirname(d)
+        if nd == d:
+            return False
+        d = nd
+
+
+def find_git(root: str) -> List[str]:
+    """作業フォルダ内の .git をすべて探す（__pycache__・.venv・node_modules の中も）。git は実行しない。"""
+    root = os.path.abspath(root)
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for name in dirnames + filenames:
+            if name == ".git":
+                found.append(_rel(root, os.path.join(dirpath, name)))
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+    return sorted(found)
+
+
+def nested_git_now(root: str) -> List[str]:
+    """実行前の点検: root/.git は、上位に .git が無い（root がリポジトリの根）ときだけ正当とみなす。"""
+    top_ok = not _has_git_above(root)
+    return [p for p in find_git(root) if not (p == ".git" and top_ok)]
+
+
+def nested_git(before: dict, after: dict) -> List[str]:
+    """実行前と違う .git（新規・変更・削除）。"""
+    b, a = before["files"], after["files"]
+    return sorted(p for p in set(b) | set(a)
+                  if (a.get(p, {}).get("t") == "git" or b.get(p, {}).get("t") == "git") and a.get(p) != b.get(p))
+
+
+def quarantine_git(root: str, before: dict, dest: str, real_gitdir: str = "") -> Tuple[List[str], List[str]]:
+    """実行前に無かった（か変わった）.git を作業フォルダの外へ移す（名前から .git を外す）。(移した, 移せなかった) を返す。"""
+    root = os.path.abspath(root)
+    real_git = os.path.realpath(real_gitdir) if real_gitdir else ""
+    moved, failed = [], []
+    targets = []
+    for rel in find_git(root):
+        full = os.path.join(root, rel)
+        if _is_real_git(full, real_git):
+            continue
+        if before["files"].get(rel) == _git_entry(full):
+            continue  # 実行前からあって変わっていない（ワークツリーの .git ファイル等。実行前の点検で入れ子は弾いてある）
+        targets.append(rel)
+    if targets:
+        os.makedirs(dest, mode=0o700, exist_ok=True)
+    for i, rel in enumerate(targets, 1):
+        target = os.path.join(dest, "%02d-%s" % (i, rel.replace("/", "_").replace(".git", "dotgit")))
+        try:
+            shutil.move(os.path.join(root, rel), target)
+            moved.append(rel)
+        except OSError:
+            failed.append(rel)
+    return moved, failed
+
+
+def _fp_entry(path: str) -> bytes:
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return path.encode() + b"\0none\n"
+    if stat.S_ISLNK(st.st_mode):
+        return path.encode() + b"\0link:" + os.readlink(path).encode() + b"\n"
+    fh = _open_regular(path) if stat.S_ISREG(st.st_mode) else None
+    if fh is None:
+        return path.encode() + b"\0special:%o\n" % st.st_mode
+    with fh:
+        return path.encode() + b"\0%o:" % stat.S_IMODE(st.st_mode) + hashlib.sha256(fh.read()).hexdigest().encode() + b"\n"
+
+
+def git_fingerprint(gitdir: str) -> str:
+    """本物の GITDIR のうち、コマンドを仕込める場所（config・config.worktree・info/attributes・hooks/）のハッシュ。"""
+    h = hashlib.sha256()
+    dirs = [os.path.abspath(gitdir)]
+    fh = _open_regular(os.path.join(gitdir, "commondir"))
+    if fh is not None:
+        with fh:
+            common = fh.read(4096).decode("utf-8", "replace").strip()
+        dirs.append(os.path.normpath(os.path.join(gitdir, common)))
+    for d in dirs:
+        for name in ("config", "config.worktree", "commondir", "info/attributes"):
+            h.update(_fp_entry(os.path.join(d, name)))
+        hooks = os.path.join(d, "hooks")
+        h.update(_fp_entry(hooks) if os.path.islink(hooks) or not os.path.isdir(hooks) else b"hooks-dir\n")
+        if os.path.isdir(hooks) and not os.path.islink(hooks):
+            for n in sorted(os.listdir(hooks)):
+                h.update(_fp_entry(os.path.join(hooks, n)))
+    return h.hexdigest()
+
+
+def file_sum(path: str) -> str:
+    """ファイルの種類・権限・ハッシュ（FIFO などは開かない）。無ければ none。"""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return "none"
+    if stat.S_ISLNK(st.st_mode):
+        return "link:" + os.readlink(path)
+    fh = _open_regular(path) if stat.S_ISREG(st.st_mode) else None
+    if fh is None:
+        return "special:%o" % st.st_mode
+    h = hashlib.sha256()
+    with fh:
+        mode = stat.S_IMODE(os.fstat(fh.fileno()).st_mode)
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return "file:%o:%s" % (mode, h.hexdigest())
+
+
+def _match(path: str, globs) -> bool:
+    return any(fnmatch.fnmatchcase(path, g) for g in globs)
+
+
+def is_system(path: str) -> bool:
+    return path in APPEND_ONLY or _match(path, APPEND_GLOBS) or _match(path, MARKER_GLOBS)
+
+
+def system_change_problem(root: str, p: str, b: Optional[dict], a: Optional[dict]) -> str:
+    """司令塔・orch・hooks の記録ファイルの変更が許せる形かを調べる。問題があれば理由、無ければ空文字。"""
+    if a is None:
+        return f"記録ファイルの削除: {p}"
+    if a.get("t") != "file":
+        return f"記録ファイルが通常のファイルでない: {p}"
+    if a.get("m", 0) & 0o111:
+        return f"記録ファイルに実行権限: {p}"
+    if (p in APPEND_ONLY or _match(p, APPEND_GLOBS)) and b and b.get("t") == "file":
+        n = int(b.get("n", 0))
+        if a.get("n", 0) < n:
+            return f"記録ファイルが短くなった（追記以外の変更）: {p}"
+        fh = _open_regular(os.path.join(root, p))
+        if fh is None:
+            return f"記録ファイルを読めない: {p}"
+        with fh:
+            head = fh.read(n)
+        if hashlib.sha256(head).hexdigest() != b.get("h"):
+            return f"記録ファイルの既存部分が変わった（追記以外の変更）: {p}"
+    return ""
 
 
 def changes(before: dict, after: dict) -> List[str]:
@@ -114,31 +338,55 @@ def added_lines(old: str, new: str) -> List[str]:
     return out
 
 
-def compare(root: str, before: dict, allowed: List[str]) -> List[str]:
-    after = snapshot(root)
+def compare(root: str, before: dict, allowed: List[str], real_gitdir: str = "") -> Tuple[List[str], List[str]]:
+    """(問題の一覧, 記録ファイル以外の変更の一覧) を返す。"""
+    after = snapshot(root, real_gitdir)
     problems = []
-    for p in changes(before, after):
+    for p in nested_git(before, after):
+        problems.append(f"入れ子の .git（git の設定でコマンドを仕込める）: {p}")
+    changed = changes(before, after)
+    for p in changed:
+        b_ent, ent = before["files"].get(p), after["files"].get(p)
+        kind = (ent or b_ent or {}).get("t")
+        if kind == "git":
+            continue  # 上で報告済み
+        if (ent or {}).get("t") == "badartifact":
+            problems.append(f"__pycache__/.pytest_cache が本物のディレクトリでない（リンク等）: {p}")
+            continue
+        if (ent or {}).get("t") == "special":
+            problems.append(f"通常のファイルでないもの（FIFO 等）: {p}")
+            continue
+        if is_system(p):
+            why = system_change_problem(root, p, b_ent, ent)
+            if why:
+                problems.append(why)
+            continue
         if not is_allowed(p, allowed):
             problems.append(f"ALLOWED 外の変更: {p}")
             continue
-        ent = after["files"].get(p)
         if ent is None:
             continue  # ALLOWED 内の削除
         if ent["t"] == "link":
             if any(m in ent["v"] for m in PRIVATE_MARKERS):
                 problems.append(f"非公開の印の混入（リンク先）: {p}")
             continue
+        if b_ent and b_ent.get("t") == "file" and ent.get("m", 0) & 0o111 and not b_ent.get("m", 0) & 0o111:
+            problems.append(f"実行権限が付いた: {p}")
+            continue
         new = after["contents"].get(p)
         if new is None:
-            full = os.path.join(root, p)
-            with open(full, "rb") as fh:
+            fh = _open_regular(os.path.join(root, p))
+            if fh is None:
+                problems.append(f"読めない変更: {p}")
+                continue
+            with fh:
                 new = fh.read(CONTENT_MAX).decode("utf-8", "replace")
         old = before["contents"].get(p, "")
         for i, line in enumerate(added_lines(old, new), 1):
             if any(m in line for m in PRIVATE_MARKERS):
                 problems.append(f"非公開の印の混入: {p}（追加行 {i}）")
                 break
-    return problems
+    return problems, [p for p in changed if not is_system(p)]
 
 
 def ledger(a: argparse.Namespace) -> int:
@@ -156,13 +404,22 @@ def ledger(a: argparse.Namespace) -> int:
     return 0
 
 
+def _load(path: str) -> dict:
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(prog="scope_check")
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("allowed"); s.add_argument("spec")
-    s = sub.add_parser("snapshot"); s.add_argument("root"); s.add_argument("out")
-    s = sub.add_parser("count"); s.add_argument("root"); s.add_argument("before")
-    s = sub.add_parser("compare"); s.add_argument("root"); s.add_argument("before"); s.add_argument("allowed")
+    s = sub.add_parser("nested-git"); s.add_argument("root")
+    s = sub.add_parser("snapshot"); s.add_argument("root"); s.add_argument("out"); s.add_argument("--real-gitdir", default="")
+    s = sub.add_parser("count"); s.add_argument("root"); s.add_argument("before"); s.add_argument("--real-gitdir", default="")
+    s = sub.add_parser("compare"); s.add_argument("root"); s.add_argument("before"); s.add_argument("allowed"); s.add_argument("--real-gitdir", default="")
+    s = sub.add_parser("quarantine-git"); s.add_argument("root"); s.add_argument("before"); s.add_argument("dest"); s.add_argument("--real-gitdir", default="")
+    s = sub.add_parser("gitfp"); s.add_argument("gitdir")
+    s = sub.add_parser("fsum"); s.add_argument("path")
     s = sub.add_parser("ledger")
     s.add_argument("--data-dir", required=True); s.add_argument("--vendor", default="codex")
     s.add_argument("--model", default=""); s.add_argument("--purpose", default="")
@@ -170,8 +427,9 @@ def main(argv: List[str]) -> int:
     a = ap.parse_args(argv)
     if a.cmd == "allowed":
         try:
-            text = open(a.spec, encoding="utf-8").read()
-        except OSError:
+            with open(a.spec, encoding="utf-8") as fh:
+                text = fh.read()
+        except (OSError, UnicodeDecodeError):
             print("scope_check: 指示書を読めません", file=sys.stderr)
             return 2
         items = parse_allowed(text)
@@ -180,27 +438,46 @@ def main(argv: List[str]) -> int:
             return 2
         print("\n".join(items))
         return 0
+    if a.cmd == "nested-git":
+        found = nested_git_now(a.root)
+        for p in found[:20]:
+            print(f"scope_check: 作業フォルダ内に .git があります: {p}", file=sys.stderr)
+        return 3 if found else 0
     if a.cmd == "snapshot":
-        snap = snapshot(a.root)
+        snap = snapshot(a.root, a.real_gitdir)
         fd = os.open(a.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(snap, fh, ensure_ascii=False)
         return 0
     if a.cmd == "count":
-        before = json.load(open(a.before, encoding="utf-8"))
-        print(len(changes(before, snapshot(a.root))))
+        print(len(changes(_load(a.before), snapshot(a.root, a.real_gitdir))))
         return 0
+    if a.cmd == "quarantine-git":
+        moved, failed = quarantine_git(a.root, _load(a.before), a.dest, a.real_gitdir)
+        for p in moved:
+            print(f"scope_check: 入れ子の .git を作業フォルダの外へ隔離しました: {p}", file=sys.stderr)
+        for p in failed:
+            print(f"scope_check: 入れ子の .git を隔離できませんでした（git を使わないこと）: {p}", file=sys.stderr)
+        if failed:
+            return 4
+        return 3 if moved else 0
     if a.cmd == "compare":
-        before = json.load(open(a.before, encoding="utf-8"))
         allowed = [l for l in open(a.allowed, encoding="utf-8").read().splitlines() if l]
-        problems = compare(a.root, before, allowed)
+        problems, changed = compare(a.root, _load(a.before), allowed, a.real_gitdir)
         if problems:
             print("scope_check: NG", file=sys.stderr)
             for pr in problems[:50]:
                 print(f"  - {pr}", file=sys.stderr)
             return 3
-        n = len(changes(before, snapshot(a.root)))
-        print(f"scope_check: OK（変更 {n} 件、すべて ALLOWED 内）")
+        print(f"scope_check: OK（変更 {len(changed)} 件、すべて ALLOWED 内）")
+        for p in changed[:50]:
+            print(f"  - {p}")
+        return 0
+    if a.cmd == "gitfp":
+        print(git_fingerprint(a.gitdir))
+        return 0
+    if a.cmd == "fsum":
+        print(file_sum(a.path))
         return 0
     if a.cmd == "ledger":
         return ledger(a)

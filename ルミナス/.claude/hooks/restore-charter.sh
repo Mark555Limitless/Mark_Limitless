@@ -19,7 +19,32 @@ fi
 
 # 保護ファイル（憲章・権限・hooks）に未コミットの差分があれば最初に警告する（自己改変の検知）
 PROTECTED="CHARTER.md VIRTUAL_MARK.md ROUTINE.md CLAUDE.md AGENTS.md .env.example prompts/ルミナス_最終プロンプト.md .claude .codex .githooks .mcp.json scripts/secret-scan.sh scripts/sync-obsidian.sh scripts/build-final-prompt-docx.mjs package.json package-lock.json"
-if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+# git を使う前に、入れ子の .git が無いことを git を使わずに確かめる（.git の設定に仕込まれたコマンドを走らせないため）
+NESTED="$(hook_nested_git)"
+HEALTH_SKIP=""
+if [ -n "$NESTED" ]; then
+  echo
+  echo "!!! 作業フォルダ内に .git があります（${NESTED#"$ROOT"/}）。Codex が作った可能性があります。git コマンドを使わずに中身を確かめ、作業フォルダの外へ移すこと。この hook は git の点検を省きました。"
+  HEALTH_SKIP="入れ子の .git"
+fi
+if [ -f "$ROOT/data/.codex_violation" ]; then
+  echo
+  echo "!!! 前回の Codex 実行で違反が出たままです（data/.codex_violation）。記録を読み、差分を確認・片付けてから削除すること。それまで codex_impl.sh は実行を断る。"
+  sed -n '1,4p' "$ROOT/data/.codex_violation" 2>/dev/null | hook_trunc 200 | sed 's/^/    /'
+  HEALTH_SKIP="${HEALTH_SKIP:-Codex の違反が未処理}"
+fi
+if [ -d "$ROOT/data/codex_runs/.lock" ]; then
+  echo
+  if hook_codex_running; then
+    echo "!!! Codex が実行中です（PID $(hook_codex_owner)）。終わるまでこのフォルダのファイルを編集しないこと（codex-lock-guard が止める）。"
+  else
+    echo "!!! Codex のロックが残っています（持ち主は動いていない）。前回の実行が途中で止まった可能性があるので、差分を確認すること。"
+  fi
+  HEALTH_SKIP="${HEALTH_SKIP:-Codex の実行中または中断}"
+fi
+if [ -z "$NESTED" ] && git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  # orch/ に未コミット（未審査）の変更があるうちは、点検（orch のコードを実行する）を行わない
+  [ -n "$(git -C "$ROOT" status --porcelain --untracked-files=all -- orch 2>/dev/null)" ] && HEALTH_SKIP="${HEALTH_SKIP:-orch/ に未審査の変更}"
   if ! git -C "$ROOT" diff --quiet HEAD -- $PROTECTED 2>/dev/null || [ -n "$(git -C "$ROOT" ls-files --others --exclude-standard -- $PROTECTED 2>/dev/null)" ]; then
     echo
     echo "!!! 注意: 憲章・権限・hooks・自走範囲に未コミットの差分があります。Mark の承認済みか確認し、未承認なら元に戻すこと（憲章 §4）。"
@@ -66,7 +91,9 @@ echo "--- 最終プロンプト（prompts/ルミナス_最終プロンプト.md�
 [ -f "$ROOT/prompts/ルミナス_最終プロンプト.md" ] && awk '/^## 1\./ {p=1} /^## 2\./ {p=0} p' "$ROOT/prompts/ルミナス_最終プロンプト.md" | head -n 4 | hook_trunc 260
 
 # 外部AIの点検（分譲指示書 §6 ④）。無人実行（FABLE5_HEADLESS=1）では出さない
-if [ "${FABLE5_HEADLESS:-0}" != "1" ]; then
+if [ -n "$HEALTH_SKIP" ]; then
+  echo; echo "=== 外部AIの点検（orch.health）は省略: ${HEALTH_SKIP}（Codex が書いた未審査のコードを実行しないため）==="
+elif [ "${FABLE5_HEADLESS:-0}" != "1" ]; then
   PYBIN="$ROOT/.venv/bin/python"; [ -x "$PYBIN" ] || PYBIN="$(command -v python3)"
   if [ -n "$PYBIN" ] && [ -d "$ROOT/orch" ]; then
     echo; echo "=== 外部AIの点検（orch.health）==="

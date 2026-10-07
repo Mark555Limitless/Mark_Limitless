@@ -20,6 +20,13 @@ printf '%s' "$NORM" | grep -qE '(^|[;&| ])git( -[A-Za-z-]+( [^ ]+)?)* (commit|pu
 
 SCAN="$ROOT/scripts/secret-scan.sh"
 [ -x "$SCAN" ] || { echo "guard-secrets: $SCAN が無いため検査できません。" >&2; exit 2; }
+# 入れ子の .git があると、この検査の git も commit 自体もその設定（fsmonitor 等）でコマンドを走らせる。git を使う前に止める
+. "$ROOT/.claude/hooks/_lib.sh"
+NESTED="$(hook_nested_git)"
+if [ -n "$NESTED" ]; then
+  echo "ブロック: 作業フォルダ内に .git があります（${NESTED#"$ROOT"/}）。Codex が作った可能性があるので、git を使わずに確かめて外へ移してから commit / push してください。" >&2
+  exit 2
+fi
 {
   git -C "$ROOT" diff HEAD -U0 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+'
   git -C "$ROOT" diff --cached -U0 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+'

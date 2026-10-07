@@ -3,6 +3,7 @@ import json
 import os
 import pty
 import shutil
+import signal
 import stat
 import subprocess
 import time
@@ -42,6 +43,20 @@ case "$FAKE_MODE" in
   glob) echo "# glob" >> orch/config.py ;;
   pycache) mkdir -p orch/__pycache__ .pytest_cache && echo x > orch/__pycache__/evil.cpython-39.pyc && echo x > .pytest_cache/v ;;
   opinion) echo "意見です" ;;
+  nestedgit) git init -q . && printf '#!/bin/sh\ntouch "%s"\n' "$FAKE_PWNED" > .git/fsm.sh && chmod +x .git/fsm.sh && git config core.fsmonitor "$PWD/.git/fsm.sh" ;;
+  nestedgit_sub) git init -q orch && printf '#!/bin/sh\ntouch "%s"\n' "$FAKE_PWNED" > orch/.git/fsm.sh && chmod +x orch/.git/fsm.sh && git -C orch config core.fsmonitor "$PWD/orch/.git/fsm.sh" ;;
+  gitconfig) printf '#!/bin/sh\ntouch "%s"\n' "$FAKE_PWNED" > "$FAKE_PWNED.sh" && chmod +x "$FAKE_PWNED.sh" && git config core.fsmonitor "$FAKE_PWNED.sh" ;;
+  pycache_link) ln -s "$FAKE_TARGET" orch/__pycache__ ;;
+  pytestcache_file) echo x > .pytest_cache ;;
+  syswrites) mkdir -p logs state/.sessions && echo '{"b":2}' >> data/usage.jsonl && echo "g" >> logs/gemini.log && : > logs/gemini.lock \
+             && : > data/usage.lock && date +%s > state/.sessions/other.start && echo "e" >> state/escalations.log && echo "VERSION_INFO = 2" >> orch/__init__.py ;;
+  truncate_log) : > data/usage.jsonl ;;
+  exec_log) chmod +x data/usage.jsonl ;;
+  fifo) mkfifo orch/pipe ;;
+  fifo_env) rm -f .env && mkfifo .env ;;
+  envchmod) chmod 644 .env ;;
+  newexec) echo "x" >> orch/__init__.py && chmod +x orch/__init__.py ;;
+  sleep) sleep 30 ;;
 esac
 [ -n "$out" ] && echo "変更しました" > "$out"
 exit 0
@@ -55,10 +70,11 @@ def git(cwd, *args):
                           cwd=cwd, capture_output=True, text=True, check=True).stdout
 
 
-@pytest.fixture
-def proj(tmp_path, monkeypatch):
-    p = tmp_path / "ルミナス"
-    p.mkdir()
+def _build(tmp_path, parent):
+    """parent=True なら、リポジトリの根を1つ上に置き、ルミナスをその中のフォルダにする（GitHub の写しと同じ形）。"""
+    top = tmp_path / "repo" if parent else tmp_path / "ルミナス"
+    p = top / "ルミナス" if parent else top
+    p.mkdir(parents=True)
     for d in ("tools", "orch", "scripts"):
         shutil.copytree(ROOT / d, p / d, ignore=shutil.ignore_patterns("__pycache__"))
     (p / "docs" / "specs").mkdir(parents=True)
@@ -67,28 +83,48 @@ def proj(tmp_path, monkeypatch):
     (p / "docs" / "astra-packets" / "p.md").write_text("問い: この設計の穴は？\n", encoding="utf-8")
     (p / "docs" / "ルミナス メモ.md").write_text("メモ\n", encoding="utf-8")
     (p / "README.md").write_text("readme\n", encoding="utf-8")
-    (p / ".gitignore").write_text(".env\ndata/\nlogs/\n__pycache__/\nnotes.md\n", encoding="utf-8")
+    (p / ".gitignore").write_text(".env\ndata/\nlogs/\n__pycache__/\nnotes.md\nstate/\n", encoding="utf-8")
     (p / ".env").write_text("A=1\n", encoding="utf-8")
+    (p / ".env").chmod(0o600)
     (p / "docs" / "specs" / "s.md").write_text(SPEC, encoding="utf-8")
-    git(p, "init", "-q")
-    git(p, "add", "-A")
-    git(p, "commit", "-q", "-m", "init")
+    git(top, "init", "-q")
+    git(top, "add", "-A")
+    git(top, "commit", "-q", "-m", "init")
     (p / "notes.md").write_text("既存のメモ\n", encoding="utf-8")  # 実行前からある ignore 対象のファイル
     fake = tmp_path / "bin" / "codex"
     fake.parent.mkdir()
     fake.write_text(FAKE_CODEX, encoding="utf-8")
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
     cache = Path.home() / ".cache" / f"luminous-test-{uuid.uuid4().hex[:8]}"  # Codex が書けない場所（/tmp の外）
-    yield p, fake, tmp_path / "fake.log", cache
-    shutil.rmtree(cache, ignore_errors=True)
+    return p, fake, tmp_path / "fake.log", cache
 
 
-def run(proj, mode, *, script="codex_impl.sh", args=("docs/specs/s.md", "low"), extra_env=None):
+@pytest.fixture
+def proj(tmp_path):
+    t = _build(tmp_path, parent=False)
+    yield t
+    shutil.rmtree(t[3], ignore_errors=True)
+
+
+@pytest.fixture
+def proj_parent(tmp_path):
+    t = _build(tmp_path, parent=True)
+    yield t
+    shutil.rmtree(t[3], ignore_errors=True)
+
+
+def env_for(proj, mode, extra_env=None):
     p, fake, log, cache = proj
-    env = dict(os.environ, CODEX_BIN=str(fake), FAKE_MODE=mode, FAKE_LOG=str(log), FAKE_MARK=MARK, XDG_CACHE_HOME=str(cache))
+    env = dict(os.environ, CODEX_BIN=str(fake), FAKE_MODE=mode, FAKE_LOG=str(log), FAKE_MARK=MARK, XDG_CACHE_HOME=str(cache),
+               FAKE_PWNED=str(log.parent / "pwned"), FAKE_TARGET=str(log.parent / "target"))
     env.pop("CODEX_FALLBACK_MODEL", None)
     env.update(extra_env or {})
-    return subprocess.run(["bash", f"tools/{script}", *args], cwd=p, env=env, capture_output=True, text=True)
+    return env
+
+
+def run(proj, mode, *, script="codex_impl.sh", args=("docs/specs/s.md", "low"), extra_env=None, timeout=120):
+    return subprocess.run(["bash", f"tools/{script}", *args], cwd=proj[0], env=env_for(proj, mode, extra_env),
+                          capture_output=True, text=True, timeout=timeout)
 
 
 def calls(proj):
@@ -227,6 +263,141 @@ def test_added_lines_starting_with_plus():
     spec = importlib.util.spec_from_file_location("sc", ROOT / "tools" / "scope_check.py")
     sc = importlib.util.module_from_spec(spec); spec.loader.exec_module(sc)
     assert sc.added_lines("a\n", "a\n++" + MARK + "\n") == ["++" + MARK]
+
+
+# ---- 2回目の審査で指摘された抜け道（入れ子の .git・リンク・同時書き込み・FIFO・権限・中断・ロック） ----
+def quarantined(proj):
+    return list((proj[3] / "luminous-codex" / "quarantine").glob("*/*"))
+
+
+@pytest.mark.parametrize("mode", ["nestedgit", "nestedgit_sub"])
+def test_nested_git_with_fsmonitor_is_quarantined_before_any_git(proj_parent, mode):
+    p = proj_parent[0]
+    r = run(proj_parent, mode)
+    assert r.returncode == 3, (r.stdout, r.stderr)
+    assert not (p.parent.parent / "pwned").exists(), "入れ子の .git の fsmonitor が実行された"
+    assert not (p / ".git").exists() and not (p / "orch" / ".git").exists()
+    assert len(quarantined(proj_parent)) == 1
+    assert (p / "data" / ".codex_violation").exists()
+
+
+def test_nested_git_sub_in_root_layout(proj):
+    r = run(proj, "nestedgit_sub")
+    assert r.returncode == 3 and not (proj[0].parent / "pwned").exists() and not (proj[0] / "orch" / ".git").exists()
+
+
+def test_real_git_config_change_is_3_and_git_is_not_run(proj):
+    r = run(proj, "gitconfig")
+    assert r.returncode == 3 and "設定" in r.stderr
+    assert not (proj[0].parent / "pwned").exists()
+
+
+@pytest.mark.parametrize("where", ["orch/.git", ".git"])
+def test_existing_nested_git_refuses_before_launch(proj_parent, where):
+    (proj_parent[0] / where).mkdir()
+    r = run(proj_parent, "allowed")
+    assert r.returncode == 2 and ".git" in r.stderr and not calls(proj_parent)
+
+
+def test_pycache_symlink_is_violation_and_link_removed(proj):
+    target = proj[0].parent / "target"
+    target.mkdir()
+    (target / "keep.txt").write_text("消えないこと\n", encoding="utf-8")
+    r = run(proj, "pycache_link")
+    assert r.returncode == 3 and "__pycache__" in r.stderr
+    assert not os.path.lexists(proj[0] / "orch" / "__pycache__")
+    assert (target / "keep.txt").exists()
+
+
+def test_pytest_cache_as_file_is_violation(proj):
+    r = run(proj, "pytestcache_file")
+    assert r.returncode == 3 and not os.path.lexists(proj[0] / ".pytest_cache")
+
+
+def _seed_ledger(p):
+    (p / "data").mkdir(exist_ok=True)
+    (p / "data" / "usage.jsonl").write_text('{"a":1}\n', encoding="utf-8")
+
+
+def test_concurrent_system_writes_are_not_violations(proj):
+    _seed_ledger(proj[0])
+    r = run(proj, "syswrites")
+    assert r.returncode == 0, r.stderr
+    assert "orch/__init__.py" in r.stdout and "usage.jsonl" not in r.stdout
+
+
+@pytest.mark.parametrize("mode", ["truncate_log", "exec_log"])
+def test_ledger_rewrite_or_exec_is_violation(proj, mode):
+    _seed_ledger(proj[0])
+    r = run(proj, mode)
+    assert r.returncode == 3, r.stderr
+
+
+@pytest.mark.parametrize("mode", ["fifo", "fifo_env"])
+def test_fifo_is_violation_without_hang(proj, mode):
+    r = run(proj, mode, timeout=90)
+    assert r.returncode == 3, r.stderr
+
+
+def test_env_mode_change_is_violation(proj):
+    r = run(proj, "envchmod")
+    assert r.returncode == 3 and ".env" in r.stderr
+
+
+def test_new_exec_bit_is_violation(proj):
+    r = run(proj, "newexec")
+    assert r.returncode == 3 and "実行権限" in r.stderr
+
+
+def test_violation_marker_blocks_next_run(proj):
+    assert run(proj, "outside").returncode == 3
+    r = run(proj, "allowed")
+    assert r.returncode == 2 and ".codex_violation" in r.stderr and len(calls(proj)) == 1
+
+
+def test_sigterm_removes_safe_dir_and_releases_lock(proj):
+    p, _, log, cache = proj
+    proc = subprocess.Popen(["bash", "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p, env=env_for(proj, "sleep"),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    deadline = time.time() + 30
+    while time.time() < deadline and not (log.exists() and log.read_text().strip()):
+        time.sleep(0.1)
+    assert log.exists(), "偽の codex が起動しなかった"
+    time.sleep(0.3)
+    os.killpg(proc.pid, signal.SIGTERM)
+    out, err = proc.communicate(timeout=60)
+    assert proc.returncode == 130, (out, err)
+    assert not list((cache / "luminous-codex").glob("run.*"))
+    assert not (p / "data" / "codex_runs" / ".lock").exists()
+
+
+def test_live_old_lock_is_not_reclaimed(proj):
+    lock = proj[0] / "data" / "codex_runs" / ".lock"
+    lock.mkdir(parents=True)
+    (lock / "owner").write_text(f"{os.getpid()} 0\n")
+    old = time.time() - 3 * 3600
+    os.utime(lock, (old, old))
+    r = run(proj, "allowed")
+    assert r.returncode == 2 and not calls(proj) and lock.exists()
+
+
+def test_lock_without_owner_is_not_reclaimed(proj):
+    lock = proj[0] / "data" / "codex_runs" / ".lock"
+    lock.mkdir(parents=True)
+    assert run(proj, "allowed").returncode == 2 and lock.exists() and not calls(proj)
+
+
+def test_spec_name_starting_with_dash_records_purpose(proj, isolated_env):
+    (proj[0] / "docs" / "specs" / "-dash.md").write_text(SPEC, encoding="utf-8")
+    r = run(proj, "allowed", args=("docs/specs/-dash.md", "low"))
+    assert r.returncode == 0, r.stderr
+    rows = [json.loads(l) for l in (isolated_env / "data" / "usage.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert rows[-1]["purpose"] == "-dash"
+
+
+def test_parent_layout_allowed_change_ok(proj_parent):
+    r = run(proj_parent, "allowed")
+    assert r.returncode == 0, r.stderr
 
 
 # ---- 意見役 ----

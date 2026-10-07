@@ -5,7 +5,8 @@ Codex は (a) 指示書に従う実装役（`tools/codex_impl.sh` から呼ば�
 司令塔は Claude（Claude Code）。git 操作・公開・コミット・最終判断は司令塔が行う。応答は日本語。
 
 ## 実装役として（全項目必須）
-- 指示書の `<!-- ALLOWED -->` に書かれたファイルだけを変更する。git commit はしない（git の操作はすべてしない）
+- 指示書の `<!-- ALLOWED -->` に書かれたファイルだけを変更する。git commit はしない（git の操作はすべてしない。`git init` や `.git` の作成・変更もしない）
+- 実行権限の付与、シンボリックリンク・FIFO の作成、`__pycache__`・`.pytest_cache` を本物のディレクトリ以外で作ることはしない（すべて違反として検出される）
 - `.env` を読まない・表示しない。`data/` と `logs/` を読み書きしない（テストは一時ディレクトリを使う）
 - テストで実際の外部 API（Gemini・TypeSafe・X・Anthropic・OpenAI）を呼ばない。requests と subprocess はモックにする
 - 上限・停止スイッチ・記録の仕組みを外したり迂回したりしない。鍵や本文をログに書かない

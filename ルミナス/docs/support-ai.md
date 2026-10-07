@@ -34,7 +34,9 @@
 ## 3. Codex（実装役・意見役）
 
 - 実装: 指示書（`docs/specs/`、型は `docs/specs/README.md`）→ `tools/codex_impl.sh`（`-s workspace-write`、memories と multi_agent を無効化）→ `tools/scope_check.py` が ALLOWED 外の変更と非公開の印（`/Users/`・`_非公開`）を検出 → `git diff` → テスト → 審査（Agent・model: opus・`docs/review.md`、1行目 APPROVE）→ 司令塔が該当ファイルだけコミット
-- 終了コード: 0=成功 / 2=前提の誤り（停止中・実行中・指示書不備・作業ツリーが汚い・本体なし）/ 3=ALLOWED 外・非公開の印・`.env` の変更 / 4=利用枠の上限 / 5=Codex の失敗
+- 終了コード: 0=成功 / 2=前提の誤り（停止中・実行中・前回の違反が未処理・指示書不備・作業ツリーが汚い・作業フォルダ内に .git・本体なし）/ 3=違反（ALLOWED 外・非公開の印・`.env` の内容か権限・HEAD・本物の .git の設定や hooks・入れ子の .git・リンクや FIFO）/ 4=利用枠の上限 / 5=Codex の失敗 / 130=中断
+- Codex の実行後は、入れ子の `.git` を作業フォルダの外へ隔離し、本物の `.git` の config・hooks・info/attributes が変わっていないことを確かめるまで git を1回も実行しない（`.git` の設定に仕込まれた fsmonitor 等のコマンドが、サンドボックスの外で走るのを防ぐ）。その後の git は本物の GITDIR を明示し、fsmonitor と hooks を止めて使う。SessionStart と commit 前の hook も、git を使う前に入れ子の `.git` を探す
+- 実行中はこのフォルダを編集しない（`codex-lock-guard` hook が Edit・Write を止める。SessionEnd は docx の再生成を見送る）。違反のあとは `data/.codex_violation` を消すまで次の実行を断り、SessionStart は `orch.health` を実行しない（`orch/` に未審査の変更があるときも同じ）。詳しくは `docs/specs/README.md`
 - 失敗かつ作業ツリーが無変更のときだけ、`CODEX_FALLBACK_MODEL`（既定 gpt-5.6-sol）で1回やり直す
 - 利用枠の上限（「try again at …」）: 指示書を残して待つ。途中の差分があれば再実行せず、司令塔がテストまで仕上げて審査に回す。原本の障害修正を優先する
 - 本体の場所: `CODEX_BIN` → ChatGPT アプリ同梱（2026-10-06 以降の場所）→ 古い場所（`CODEX_OLD_BIN`）→ PATH
@@ -54,7 +56,7 @@
 - 送り先 `POST https://api.typesafe.ai/v1/systemone`、`Authorization: Bearer <TYPESAFE_API_KEY>`、本文 `{"state": 文字列, "model": "jev-latest", "questions": {...}}`、応答の `answers.<問いID>`
 - 判断層 `orch.decisions`: 問いの型は Choice（選択肢のキー、120 個以下）・Score（0〜n-1）・Noul（0〜1）。問いごとに失敗時の既定値を持つ
 - 順番: jev（`JEV_ENABLED=1`・`DECISION_BACKEND=jev`・鍵あり）→ anthropic（`claude -p … --tools ""` を Haiku → Sonnet、JSON だけ）→ rules（既定値）。`fallback=False` なら Jev の失敗で既定値
-- 時間の予算 `DecisionBudget`（ミリ秒）。`CYCLE_START_EPOCH` があれば便の残り時間でも打ち切る
+- 時間の予算 `DecisionBudget`（ミリ秒、既定 `DECISION_TIMEOUT_MS=8000`）。`CYCLE_START_EPOCH` があれば便の残り時間でも打ち切る。**`claude -p` の起動だけで数秒かかることがあり、8 秒では anthropic 経路が毎回時間切れになりうる**。Mac で `--demo --backend anthropic` の所要時間を実測し、足りなければ `.env` の `DECISION_TIMEOUT_MS` を上げる（実測値を digest に残す）
 - 影ログには問いと答えを書き、判断対象の本文は書かない（文字数だけ）。鍵は伏せる
 - 料金は入力10億トークンあたり $42、1問 約 $0.0003、応答 約0.5秒（TypeSafe の自社公表・第三者検証なし）。日本語対応は一次資料に記載が無い
 - 原本の実績（二重投稿の判定、原本での実測）: 一致度 κ 0.54（補正後 約0.69）、Claude Haiku と同等以上の精度で約45倍速い。それでも最終判断は置き換えていない
@@ -111,6 +113,7 @@
 ## 10. 未確認・要確認・残るリスク
 
 - 残るリスク（2026-10-08 のコード審査で「軽」と判定、未対応）: 上限の判定・呼び出し・記録は原子的でないため、並行する N 本の呼び出しは最大 N−1 回分だけ上限を超えうる。1 回の金額が小さく並行利用も少ないので、当面は台帳の日次確認で補う。並行が増えたら「見込み額を予約してから呼ぶ」方式にする
+- 残るリスク（2026-10-08 の 2 回目のコード審査の対応後）: Codex が実行後も裏で動き続けるプロセスを残した場合、検査の最中に書き換えられる競合は完全には防げない（読み取りはリンクをたどらず FIFO で止まらない形にしてあり、検査が通っても司令塔が `git diff` と審査で見る）。ロックの回収は「持ち主が死んでいる」ときだけで、3 本が同時に回収しようとする極端な競合は扱わない
 - Codex 実装役の封じ込め: 検査器・指示書の写し・実行前の記録は Codex が書けない置き場（`~/.cache/luminous-codex/`、`LUMINOUS_SAFE_DIR` で変更可）に置き、作業領域の外の python3 を `-I -S` で使う。Codex の workspace-write サンドボックスが書ける範囲（作業フォルダ・/tmp・$TMPDIR）は二次情報によるもので、Mac で確認する
 
 - 原本の `codex_impl.sh`・`decisions.py`・`gemini_writer.py` との差（Mac で見比べる）
