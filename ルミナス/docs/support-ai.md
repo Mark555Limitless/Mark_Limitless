@@ -7,7 +7,7 @@
 ## 1. 三者の役割と呼び方
 
 | 外部AI | ルミナスでの役目 | 固定コマンド | 費用の出どころ |
-|---|---|---|---|
+|---|---|---|---|---|
 | **Codex**（GPT-6 Astra） | コードの実装。読み取り専用の「第3の意見」 | `bash tools/codex_impl.sh docs/specs/<名前>.md high` ／ `bash tools/codex_opinion.sh docs/astra-packets/<名前>.md` | ChatGPT サブスクの枠（原本・脳でんちと共有） |
 | **Gemini**（3.8 Flash ほか） | 文章の下書き・要約・別の視点 | `python3 -m orch.gemini gen --purpose <用途> < prompt.txt` ／ コードから `orch.gemini.generate()` | 従量課金（1日の上限つき） |
 | **Jev**（TypeSafe AI の System One） | 選択肢・段階・確率で答える「構造化された判断」の助言 | コードから `orch.decisions.ask(state, questions)`（Jev → Claude CLI → 既定値） | 従量課金（回数と月額の上限つき） |
@@ -53,6 +53,19 @@
 - 点検: `python3 -m orch.gemini check`（鍵の有無・本文を送らない疎通確認・当日の支出と上限）
 - 画像生成は必要になってから（段階5）
 
+## 4b. Sakana Fugu（候補。2026-10-08 Mark が新しい外部サービスとしての利用を承認・未実装）
+
+- 何か: 複数の最先端モデルを内部で使い分ける「1 つのモデルとして使えるマルチエージェント」。OpenAI 互換の API（`api.sakana.ai`）。種類は Fugu（標準）・Fugu Ultra v2（品質最優先、入力 $5・出力 $30／100 万トークン）・Fugu Max（費用対効果、$2・$6）・Fugu Cyber（申請制）
+- 性能の主張はすべて Sakana の〔自己申告〕で、2026-10 時点で第三者の独立評価は見つからない（`docs/research-sources.md` §1）
+- 使う前に残っている条件:
+  1. 規約・プライバシーポリシーの全文確認と、コンソールでの学習利用のオプトアウト（Mark。§6 の表は検索結果の抜粋による下調べ）
+  2. 鍵: Mark が `tools/set_env_key.sh SAKANA_API_KEY` で `.env` に入れる（チャットに貼らない）
+  3. 上限の決定（1 日・1 か月の USD）
+  4. 6 点セットの実装（`orch/fugu.py`。指示書 → Codex → 審査。Gemini と同じ形）
+  5. 自前の評価セットで Gemini・Claude と比べてから役割を決める
+- 送る範囲: §7 の「公開可」だけ。どの会社のモデルに渡ったかが見えないため、匿名化しても可の区分も送らない。基本の Fugu を使うなら「Fugu custom model pool」で会社を絞る
+- Sakana Namazu（日本語特化の単一モデル、同じ API）は別の候補。使うかどうかは別に判断する
+
 ## 5. Jev（構造化された判断の助言）
 
 - 送り先 `POST https://api.typesafe.ai/v1/systemone`、`Authorization: Bearer <TYPESAFE_API_KEY>`、本文 `{"state": 文字列, "model": "jev-latest", "questions": {...}}`、応答の `answers.<問いID>`
@@ -68,18 +81,18 @@
 
 この表が埋まるまでは、公開リポジトリに push 済みのもの（公開可）だけを外部AIに送る。
 
-| 確認項目 | Codex（ChatGPT ログイン） | Gemini API（有料枠） | Jev（TypeSafe 直接） |
+| 確認項目 | Codex（ChatGPT ログイン） | Gemini API（有料枠） | Jev（TypeSafe 直接） | Sakana Fugu（API。2026-10-08 司令塔が検索で下調べ・全文は Mark が確認） |
 |---|---|---|---|
-| 学習に使われるか（既定・オプトアウトの設定名） | | | |
-| 保持期間（不正監視用を含む）・ゼロ保持の可否 | | | |
-| 人がレビューするか | | | |
-| 適用される規約（消費者向け／API・事業者向け） | | | |
-| 再委託先・処理地域 | | | |
-| 出力の利用制限（競合モデル開発の禁止など） | | | |
-| 自動実行・API 利用の条項 | | | |
-| CLI のテレメトリ | | | |
-| 第三者の個人情報の条項 | | | |
-| 確認日・一次情報 URL・規約の版 | | | |
+| 学習に使われるか（既定・オプトアウトの設定名） | | | | 既定で使う（API 規約）。コンソールでいつでもオプトアウト可。効くのはこれから先の分だけで、学習済みの分は消えない |
+| 保持期間（不正監視用を含む）・ゼロ保持の可否 | | | | 保持期間はデータの種類で異なる（プライバシーポリシー）。Sakana に保存の義務も、学習済みの重み・外部ベンダーの一時キャッシュ・監査ログの削除義務もない。ゼロ保持は法人向けに相談（Namazu のページ） |
+| 人がレビューするか | | | | 〔未確認〕 |
+| 適用される規約（消費者向け／API・事業者向け） | | | | Sakana AI API Platform の利用規約（2026-09-28 発効版あり）・Usage Policy・プライバシーポリシー。Sakana Chat の規約は別 |
+| 再委託先・処理地域 | | | | 内部で他社のモデルを呼ぶが、どの会社かは非公開（問い合わせごとの表示もない）。外部の会社でのデータの扱いは〔未確認〕。基本の Fugu は API キーの「Fugu custom model pool」で会社を絞れる。Ultra・Max は固定のプールで絞れない。EU・EEA では使えない |
+| 出力の利用制限（競合モデル開発の禁止など） | | | | 〔未確認〕 |
+| 自動実行・API 利用の条項 | | | | OpenAI 互換（Chat Completions・Responses）と Anthropic Messages。Usage Policy は〔未精読〕 |
+| CLI のテレメトリ | | | | 〔未確認〕。`claude-fugu`・`codex-fugu` の起動スクリプトは自動更新しない（GitHub README） |
+| 第三者の個人情報の条項 | | | | 〔未確認〕 |
+| 確認日・一次情報 URL・規約の版 | | | | 2026-10-08 検索結果の抜粋で下調べ（全文は未確認）。console.sakana.ai/terms-of-service・/privacy-policy・/usage-policy、sakana.ai/fugu の FAQ |
 
 ## 7. 外部へ渡す範囲（境界）
 
