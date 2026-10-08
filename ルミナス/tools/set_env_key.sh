@@ -67,7 +67,7 @@ PY
       || echo "set_env_key: 保存はできましたが、疎通確認は通りませんでした（上の表示を確認）" >&2
   else
     env -u GEMINI_API_KEY -u TYPESAFE_API_KEY "$PYBIN" -m orch.decisions --check \
-      && echo "（Jev の実呼び出しは JEV_ENABLED=1 の上で python3 -m orch.decisions --demo --backend jev。1回 約 \$0.0003）"
+      && echo "（Jev の実呼び出しは JEV_ENABLED=1 の上で python3 -m orch.decisions --demo --backend jev。1回 約 \$0.0001）"
   fi
   return 0
 }

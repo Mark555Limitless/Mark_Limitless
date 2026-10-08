@@ -6,7 +6,7 @@
   通信に失敗した呼び出しも1回に数える
 - 停止スイッチ: ORCH_JEV=0 または data/.jev_disabled
 - 記録: data/usage.jsonl（vendor=jev）と logs/jev.log に1行。鍵は伏せ字にする
-- 注意: 性能の数字は TypeSafe の自社公表で第三者の検証は無い。日本語対応は一次資料に記載が無い。問いの wire 形式は二次情報から再構成
+- 注意: 速さは第三者（Vals AI）も確認、費用の差は比べる相手で変わる。英語が主で CJK は精度が下がる（公式）。wire 形式は公式の API リファレンスと一致（docs/jev-value-study.md）
 """
 from __future__ import annotations
 
