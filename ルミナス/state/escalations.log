@@ -14,4 +14,4 @@
 2026-10-08T13:00:00Z | 判断層の Jev Score 修正のコード審査 | claude-opus-5-5 | claude-opus-5-5（Agent・model 明示） | コード審査は Opus（CLAUDE.md の役割表） | 1回目 APPROVE（軽3・任意4）→ 反映分 REJECT（重大1）→ 3回目 APPROVE
 2026-10-08T13:15:00Z | Jev 利用価値の調査文書の審査 | claude-opus-5-5 | claude-sonnet-5-5（Agent・model 明示） | 文書の審査は Sonnet で十分（Mark の指示 [1]） | 重大0・中9・軽22、全件反映。Sonnet が判断しきれないとした 4 論点のうち、法的解釈と公開可の線引きは Mark の判断事項へ、優先順位と統計の読みは評価セットの結果を見てから（Opus へは上げない）
 2026-10-08T14:10:00Z | Jev 調査の反映確認と Codex への回答の審査 | claude-opus-5-5 | claude-sonnet-5-5（Agent・model 明示、同じ審査役を継続） | 文書の審査は Sonnet で十分（Mark の指示 [1]） | 31 件すべて直った・新規 軽9、回答は 重大0・中2・軽8。全件反映。上位の判断が要る 3 論点は Mark の判断事項へ
-2026-10-08T14:40:00Z | 許可台帳と全体停止の指示書の反証審査 | claude-opus-5-5 | claude-opus-5-5（Agent・model 明示） | 自走範囲の変更は安全に直結し、Sonnet の審査役も統治の論点は上位の審査が要るとした（VIRTUAL_MARK §4 の「高」） | 審査中
+2026-10-08T14:40:00Z | 許可台帳と全体停止の指示書の反証審査 | claude-opus-5-5 | claude-opus-5-5（Agent・model 明示） | 自走範囲の変更は安全に直結し、Sonnet の審査役も統治の論点は上位の審査が要るとした（VIRTUAL_MARK §4 の「高」） | REJECT（重大4・中15・軽7）。全件反映して v0.2。再審査へ
