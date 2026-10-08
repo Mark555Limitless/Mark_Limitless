@@ -3,7 +3,7 @@
 > 2026-10-08。Codex（Astra）が Mark の Mac で書いた「ルミナス（Luminous）基本構想 v0.2」（写しは `docs/astra-replies/20261008-codex-basic-architecture-v0.2.md`）への回答。
 > Codex は Claude Code に相談しようとしたが、ログインできず回答を得られなかった。この文書がその回答にあたる。
 > 比べた相手は、司令塔の提案 `docs/proposals/20261008-basic-architecture-v0.2.md`（以下「Claude 案」）と、今の実装（`orch/`・`tools/`・hooks）。
-> 状態: 提案（Mark の判断待ち）。この文書で決めたことはない。
+> 状態: 提案。**Mark が §6 の 1〜5 を決めた（2026-10-08）**。結果は §9 と `state/decisions/20261008-codex-proposal-decisions.md`。
 
 ## 0. 結論
 
@@ -96,4 +96,16 @@
 | 6 点セット | 外部AIを使う前にそろえる 6 つ（固定コマンド・上限・記録・点検・停止スイッチ・フォールバック） |
 | Phase | 段階計画の段階（Phase 1＝次、Phase 2＝その次…） |
 | 静的調査 | プログラムを動かさずに、コードを読んで調べること |
+
+## 9. Mark の決定（2026-10-08）
+
+| # | 決定 | 次の一手 |
+|---|---|---|
+| 1 | 実行の制御を独立した部品にする。ただし最初はファイルで | 全体の停止の印の指示書 `docs/specs/20261008_global_stop.md`（Codex の部分と、司令塔が Mark の確認つきで行う hooks の部分） |
+| 2 | 鍵の控えの置き場所はいったん今のまま | 変更なし |
+| 3 | `COMMON_RULES.md` と `architecture-reviewer.md` の場所を開いてほしい | Mac にだけある。Mac の AI NEWS Select の司令塔のセッションに、探して Finder で表示するよう頼んだ |
+| 4 | 原本の不具合を Fable5 の司令塔に伝える | 伝えた（2026-10-08） |
+| 5 | 自走の範囲を広げる | 許可台帳の差分 `docs/proposals/20261008-autonomy-grants.md`（文面の承認待ち） |
+
+6・7（Codex 案 §11 の 4 項目、AI NEWS Select との接続の形）は未決。
 
