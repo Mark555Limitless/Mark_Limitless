@@ -26,11 +26,15 @@ arxiv.org
 openreview.net
 iclr.cc
 api.semanticscholar.org
+www.semanticscholar.org
 huggingface.co
 artificialanalysis.ai
 lmarena.ai
+arena.ai
 vals.ai
+www.vals.ai
 tbench.ai
+www.tbench.ai
 epoch.ai
 openrouter.ai
 *.wikipedia.org
@@ -59,4 +63,9 @@ www.mod.go.jp
 - github.com は curl だと GitHub 用のプロキシが止める（このセッションのリポジトリ以外は不可）。WebFetch で読む
 - 読めないもの: ログインが要る個人のページ（console.sakana.ai の請求画面、console.x.ai）、Sakana Chat（会話画面だけで本文が無い）。ログインは Mark 本人が行う
 - 調査が終わったら、Full から「Custom」と上の一覧に戻すことを勧める
+
+## 2026-10-08 Custom に戻した後の確認
+- Mark が Custom に戻して一覧（29 件）を貼った。29 件ともプロキシに止められずにつながり、一覧にないサイト（x.com など 5 件）は止められた
+- 転送先や名前の変更で一覧から漏れていた 4 件を上の一覧に追加した: arena.ai（LMArena の新しい住所）、www.tbench.ai、www.semanticscholar.org、www.vals.ai。Mark に追加を依頼
+- サイト側の都合で読めないもの（許可リストでは直らない）: www.mod.go.jp はサイトが 403 を返す（海外からの接続を断っている可能性）、venturebeat.com は時々 429（回数制限）
 
