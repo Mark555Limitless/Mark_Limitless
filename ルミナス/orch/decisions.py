@@ -23,12 +23,13 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from . import config, jev, usage
 
 MAX_OPTIONS = 120
 SHADOW_MAX_BYTES = 5 * 1024 * 1024
+META_TOP_K = 5  # 影ログに残す Choice の確率は上位 5 件と残りの合計だけ（120 択を全部書くと 5MB にすぐ届く）
 
 
 @dataclass
@@ -73,15 +74,45 @@ class Score:
 
     def coerce(self, raw: Any) -> Optional[int]:
         if isinstance(raw, dict):
+            # Jev の score は段階を確率で重み付けした値（例 1.43）で、段階の番号ではない。
+            # probabilities があれば、確率が最大の段階を答えにする（同点は小さい番号）
+            if "probabilities" in raw:
+                return _top_level(raw["probabilities"], len(self.levels))
             for k in ("score", "level", "answer", "value"):
                 if k in raw:
                     return self.coerce(raw[k])
             return None
         if isinstance(raw, bool):
             return None
-        if isinstance(raw, (int, float)) and float(raw).is_integer() and 0 <= int(raw) < len(self.levels):
+        # 範囲を先に比べる（桁の大きい整数を float に直すと OverflowError になるため。NaN は比較が偽）
+        if isinstance(raw, (int, float)) and 0 <= raw < len(self.levels) and float(raw).is_integer():
             return int(raw)
         return None
+
+
+def _prob(x: Any) -> bool:
+    # 0〜1 の数か。float に直さずに比べる（桁の大きい整数でも OverflowError にならない。NaN・無限大は偽）
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and 0.0 <= x <= 1.0
+
+
+def _top_level(probs: Any, n: int) -> Optional[int]:
+    """{"0": 0.0, "1": 0.57, "2": 0.43} → 1。キーが段階の番号でない・確率でない値がある、
+    全部 0、合計が 1 から外れている（±0.01）ときは壊れた答えとして None（判断層は次の手段へ落ちる）。"""
+    if not isinstance(probs, dict) or not probs:
+        return None
+    best: Optional[int] = None
+    best_p = -1.0
+    total = 0.0
+    for k, p in probs.items():
+        if not (isinstance(k, str) and k.isascii() and k.isdigit() and str(int(k)) == k and int(k) < n and _prob(p)):
+            return None
+        lv = int(k)
+        total += float(p)
+        if p > best_p or (p == best_p and best is not None and lv < best):
+            best, best_p = lv, float(p)
+    if best_p <= 0.0 or abs(total - 1.0) > 0.01:
+        return None
+    return best
 
 
 @dataclass
@@ -104,7 +135,7 @@ class Noul:
             return None
         if isinstance(raw, bool):
             return None
-        if isinstance(raw, (int, float)) and 0.0 <= float(raw) <= 1.0:
+        if isinstance(raw, (int, float)) and 0.0 <= raw <= 1.0:  # 範囲を先に比べる（Score.coerce と同じ理由）
             return float(raw)
         return None
 
@@ -136,7 +167,7 @@ class Decision:
     backend: str
     reason: str
     ms: int
-    raw: Dict[str, Any] = field(default_factory=dict)
+    raw: Dict[str, Any] = field(default_factory=dict)  # Jev のときだけ: 問いごとの confidence・probabilities・score
 
 
 def _shadow(entry: Dict[str, Any]) -> None:
@@ -156,15 +187,44 @@ def _defaults(questions: Dict[str, Question]) -> Dict[str, Any]:
     return {k: q.default for k, q in questions.items()}
 
 
-def _from_jev(state: str, questions: Dict[str, Question], timeout_s: float, purpose: str) -> Dict[str, Any]:
+def _jev_meta(q: Question, raw: Any) -> Dict[str, Any]:
+    """Jev の答えから、確信度（Jev が返した値だけ）・確率分布・score（確率で重み付けした値）を取り出す。
+    確率のキーは問いの選択肢・段階の番号に限る（応答の任意の文字列を影ログに書かない）。値は小数第 4 位に丸め、
+    Choice は確率の上位 META_TOP_K 件と残りの合計（rest）に縮める。
+    Noul は answers の値がそのまま確率で、確信度は返らない（必要なら呼び手が |2p-1| を計算する）ので何も足さない。"""
+    meta: Dict[str, Any] = {}
+    if not isinstance(raw, dict) or isinstance(q, Noul):
+        return meta
+    if _prob(raw.get("confidence")):
+        meta["confidence"] = round(float(raw["confidence"]), 4)
+    valid = set(q.options) if isinstance(q, Choice) else {str(i) for i in range(len(q.levels))}
+    probs = raw.get("probabilities")
+    if isinstance(probs, dict) and probs and all(k in valid and _prob(v) for k, v in probs.items()):
+        if isinstance(q, Choice):
+            items = sorted(((k, float(v)) for k, v in probs.items()), key=lambda kv: -kv[1])
+            if len(items) > META_TOP_K:
+                meta["rest"] = round(sum(v for _, v in items[META_TOP_K:]), 4)
+                items = items[:META_TOP_K]
+        else:
+            items = sorted(((k, float(v)) for k, v in probs.items()), key=lambda kv: int(kv[0]))
+        meta["probabilities"] = {k: round(v, 4) for k, v in items}
+    s = raw.get("score")
+    if isinstance(q, Score) and isinstance(s, (int, float)) and not isinstance(s, bool) and 0 <= s <= len(q.levels) - 1:
+        meta["score"] = round(float(s), 4)
+    return meta
+
+
+def _from_jev(state: str, questions: Dict[str, Question], timeout_s: float, purpose: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     raw = jev.call(state, {k: q.wire() for k, q in questions.items()}, timeout_s=timeout_s, purpose=purpose)
     out: Dict[str, Any] = {}
+    meta: Dict[str, Any] = {}
     for k, q in questions.items():
         v = q.coerce(raw.get(k))
         if v is None:
             raise jev.JevUnavailable(f"答えの形式が不正: {k}")
         out[k] = v
-    return out
+        meta[k] = _jev_meta(q, raw.get(k))
+    return out, meta
 
 
 def _anthropic_prompt(state: str, questions: Dict[str, Question]) -> str:
@@ -261,6 +321,7 @@ def ask(
     t0 = time.monotonic()
     reasons: List[str] = []
     answers: Optional[Dict[str, Any]] = None
+    meta: Dict[str, Any] = {}
     used = "rules"
     for step in order:
         left = budget.remaining_ms()
@@ -271,7 +332,7 @@ def ask(
             if step == "jev":
                 if not jev.enabled():
                     raise jev.JevUnavailable("無効か鍵なし")
-                answers = _from_jev(state, questions, left / 1000, purpose)
+                answers, meta = _from_jev(state, questions, left / 1000, purpose)
             else:
                 answers = _from_anthropic(state, questions, budget, purpose)
             used = step
@@ -290,8 +351,9 @@ def ask(
         "state_chars": len(state),  # 判断対象の本文は書かない
         "questions": {k: {"type": type(q).__name__.lower(), "prompt": q.prompt} for k, q in questions.items()},
         "answers": answers,
+        "jev": meta,  # 確信度・確率分布（評価の校正指標に使う。docs/eval-design.md §3）
     })
-    return Decision(answers=answers, backend=used, reason=reason, ms=ms)
+    return Decision(answers=answers, backend=used, reason=reason, ms=ms, raw=meta)
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -312,7 +374,7 @@ def main(argv: Optional[list] = None) -> int:
             "question": Noul("この文章は質問か", 0.5),
         }
         d = ask("明日の東京は晴れるでしょうか。", qs, backend=a.backend, purpose="demo")
-        print(json.dumps({"backend": d.backend, "answers": d.answers, "reason": d.reason, "ms": d.ms}, ensure_ascii=False))
+        print(json.dumps({"backend": d.backend, "answers": d.answers, "reason": d.reason, "ms": d.ms, "jev": d.raw}, ensure_ascii=False))
         return 0
     ap.print_help()
     return 2

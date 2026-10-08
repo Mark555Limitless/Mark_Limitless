@@ -49,7 +49,7 @@
 
 | 対象 | 要点 | 出典 | 信頼度 |
 |---|---|---|---|
-| TypeSafe AI「Jev」 | 文章を生成せず型付き判定を返す「System One」モデル（RLCD で校正を目標に学習）。質問型は Noul（はい/いいえの確率）・Choice（最大 255 択、各確率と確信度）・Score（2〜10 段階、score は段階番号×確率の和）。`POST https://api.typesafe.ai/v1/systemone`。現行 `jev-1.13.0`、入力 10 億トークン $42・出力無料、約 0.1 秒、毎秒 80 回・10 万トークン（変動）、文脈 64k。英語が主で CJK は精度が下がる。顧客データで学習しない（ZDR は法人向け）。既知の弱点 9 項目（計算・日付・注入・選択肢の順番ほか）。事例集 18 本の数値はすべて自己申告。詳細は `docs/jev-value-study.md` | https://docs.typesafe.ai/llms-full.txt （2026-10-08 に Full で全文取得）・ https://docs.typesafe.ai/model-jaggedness/jev-1.13 ・ https://docs.typesafe.ai/models ・ https://docs.typesafe.ai/api | ①（仕様）／性能・速度・価格比は〔自己申告〕。第三者の検証は §（Jev の第三者評価）参照 |
+| TypeSafe AI「Jev」 | 文章を生成せず型付き判定を返す「System One」モデル（RLCD で校正を目標に学習）。質問型は Noul（はい/いいえの確率）・Choice（最大 255 択、各確率と確信度）・Score（2〜10 段階、score は段階番号×確率の和）。`POST https://api.typesafe.ai/v1/systemone`。現行 `jev-1.13.0`、入力 10 億トークン $42・出力無料、約 0.1 秒、毎秒 80 回・10 万トークン（変動）、文脈 64k。英語が主で CJK は精度が下がる。顧客データで学習しない（ZDR は法人向け）。既知の弱点 9 項目（計算・日付・注入・選択肢の順番ほか）。事例集 18 本の数値はすべて自己申告。詳細は `docs/jev-value-study.md` | https://docs.typesafe.ai/llms-full.txt （2026-10-08 に Full で全文取得）・ https://docs.typesafe.ai/model-jaggedness/jev-1.13 ・ https://docs.typesafe.ai/models ・ https://docs.typesafe.ai/api | ①（仕様）／性能・速度・価格比は〔自己申告〕。第三者の検証は `docs/jev-value-study.md` §6 |
 | Gemini CLI | 非対話は `gemini -p "..."`（`--output-format json` 可）、モデルは `-m`、認証は `GEMINI_API_KEY` か Google ログイン。コンテキストファイルは `GEMINI.md` | https://github.com/google-gemini/gemini-cli | ①（README 直接確認） |
 
 ## 4. Mark の既存運用（社内一次情報）
