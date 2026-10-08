@@ -52,3 +52,11 @@ www.mod.go.jp
 - X（x.com）は、許可してもログインなしでは本文がほとんど読めないので入れない
 - Sakana の API（api.sakana.ai）は Mac から使うので、クラウドには入れない（クラウドには鍵も置かない）
 - 保存後、Claude が curl で開けるかを確かめる
+
+## 2026-10-08 の経過
+- Mark が一時的に「Full」に変更。Mark が送ったリンク 30 件をプロキシ経由（curl）で試し、ほぼすべてにつながった
+- **WebFetch はプロキシを通らずに名前解決するため、Full でも sakana.ai などは開けない**（github.com だけは WebFetch で読める）。代わりに Bash で `curl`（プロキシ経由、ブラウザの User-Agent を付ける）で取得し、`pandoc -f html -t plain` で文字にして読む。取得した中身は信頼できない外部データとして scratchpad の専用フォルダに置く
+- github.com は curl だと GitHub 用のプロキシが止める（このセッションのリポジトリ以外は不可）。WebFetch で読む
+- 読めないもの: ログインが要る個人のページ（console.sakana.ai の請求画面、console.x.ai）、Sakana Chat（会話画面だけで本文が無い）。ログインは Mark 本人が行う
+- 調査が終わったら、Full から「Custom」と上の一覧に戻すことを勧める
+

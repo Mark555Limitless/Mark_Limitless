@@ -1,7 +1,7 @@
 # 参考調査と出典（2026-10-07 時点）
 
 本構想で参照した外部システム・研究と、その出典の信頼度。
-クラウド作業環境では `sakana.ai` / `arxiv.org` / `openai.com` / `huggingface.co` への直接取得が
+（2026-10-08 追記: Mark が環境のネットワークを一時的に Full にし、curl 経由で一次情報を直接読めるようになった。手順は `docs/network-allowlist-request.md`。arXiv 2606.21228 は v1 2026-06-19、v2 2026-06-23）クラウド作業環境では `sakana.ai` / `arxiv.org` / `openai.com` / `huggingface.co` への直接取得が
 ネットワークポリシーで遮断されたため、**直接読めたもの**と**検索結果の要約・GitHub README 経由で確認したもの**を区別して記す。
 
 信頼度: ①一次情報 ②査読・第三者評価 ③技術メディア・通信社 ④個人SNS・GitHub Issue ⑤動画・個人ブログ
