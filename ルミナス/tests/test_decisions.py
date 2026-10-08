@@ -72,11 +72,21 @@ def test_jev_real_shapes(jev_on, monkeypatch, isolated_env):
     ({"0": 0.0, "1": 0.0, "2": 0.0}, None),  # 全部 0
     ({"2": 0.01}, None),                     # 合計が 1 から外れている
     ({"0": 0.3, "1": 0.3}, None),
+    ({"0": 0.34, "1": 0.34, "2": 0.33}, 0),  # 小数第 2 位に丸めた確率（合計 1.01）は通す
+    ({"0": 0.33, "1": 0.33, "2": 0.33}, 0),  # 合計 0.99
+    ({"0": 0.5, "1": 0.49}, 0),
     ({}, None),
     ([0.2, 0.8], None),
 ])
 def test_score_from_probabilities(probs, expected):
     assert Score("q", ["a", "b", "c"], 1).coerce({"score": 1.0, "probabilities": probs}) == expected
+
+
+def test_score_ten_levels_rounded_to_two_decimals():
+    # 10 段階を小数第 2 位に丸めると合計は最大 ±0.05 ずれる（公式の例は第 2 位）
+    q = Score("q", [str(i) for i in range(10)], 0)
+    probs = {str(i): p for i, p in enumerate([0.02, 0.03, 0.05, 0.31, 0.2, 0.1, 0.1, 0.05, 0.05, 0.06])}
+    assert abs(sum(probs.values()) - 0.97) < 1e-9 and q.coerce({"score": 4.2, "probabilities": probs}) == 3
 
 
 def test_score_without_probabilities_needs_integer():

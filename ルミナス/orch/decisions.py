@@ -97,7 +97,9 @@ def _prob(x: Any) -> bool:
 
 def _top_level(probs: Any, n: int) -> Optional[int]:
     """{"0": 0.0, "1": 0.57, "2": 0.43} → 1。キーが段階の番号でない・確率でない値がある、
-    全部 0、合計が 1 から外れている（±0.01）ときは壊れた答えとして None（判断層は次の手段へ落ちる）。"""
+    全部 0、合計が 1 から外れているときは壊れた答えとして None（判断層は次の手段へ落ちる）。
+    合計の許容幅は、確率が小数第 2 位に丸められていても通るよう、段階ごとの丸めの誤差 0.005 × 個数（最小 0.01）に
+    浮動小数の余裕を足したもの（例: 0.34+0.34+0.33=1.01 は通す）。"""
     if not isinstance(probs, dict) or not probs:
         return None
     best: Optional[int] = None
@@ -110,7 +112,7 @@ def _top_level(probs: Any, n: int) -> Optional[int]:
         total += float(p)
         if p > best_p or (p == best_p and best is not None and lv < best):
             best, best_p = lv, float(p)
-    if best_p <= 0.0 or abs(total - 1.0) > 0.01:
+    if best_p <= 0.0 or abs(total - 1.0) > max(0.01, 0.005 * len(probs)) + 1e-9:
         return None
     return best
 
