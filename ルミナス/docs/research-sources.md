@@ -49,7 +49,7 @@
 
 | 対象 | 要点 | 出典 | 信頼度 |
 |---|---|---|---|
-| TypeSafe AI「Jev」 | 文章を生成せず型付き判定を返す「System One」モデル。質問型は Noul（はい/いいえの確率）・Choice（最大 255 択、各確率と信頼度）・Score（2〜10 段階）。`POST https://api.typesafe.ai/v1/systemone`。SDK は `pip install typesafe-sdk` / `npm install @typesafe-ai/sdk`。公開 API は 2026-09-21、入力 100 万トークン 0.042 USD・出力無料（自己申告） | https://docs.typesafe.ai/introduction ・ https://github.com/rajivkuriakose/typesafe-jev-examples ・ https://github.com/kraayenjon/awesome-jev | ①（公式ドキュメントは遮断で未読。GitHub の例と検索要約で確認）／価格は自己申告 |
+| TypeSafe AI「Jev」 | 文章を生成せず型付き判定を返す「System One」モデル（RLCD で校正を目標に学習）。質問型は Noul（はい/いいえの確率）・Choice（最大 255 択、各確率と確信度）・Score（2〜10 段階、score は段階番号×確率の和）。`POST https://api.typesafe.ai/v1/systemone`。現行 `jev-1.13.0`、入力 10 億トークン $42・出力無料、約 0.1 秒、毎秒 80 回・10 万トークン（変動）、文脈 64k。英語が主で CJK は精度が下がる。顧客データで学習しない（ZDR は法人向け）。既知の弱点 9 項目（計算・日付・注入・選択肢の順番ほか）。事例集 18 本の数値はすべて自己申告。詳細は `docs/jev-value-study.md` | https://docs.typesafe.ai/llms-full.txt （2026-10-08 に Full で全文取得）・ https://docs.typesafe.ai/model-jaggedness/jev-1.13 ・ https://docs.typesafe.ai/models ・ https://docs.typesafe.ai/api | ①（仕様）／性能・速度・価格比は〔自己申告〕。第三者の検証は §（Jev の第三者評価）参照 |
 | Gemini CLI | 非対話は `gemini -p "..."`（`--output-format json` 可）、モデルは `-m`、認証は `GEMINI_API_KEY` か Google ログイン。コンテキストファイルは `GEMINI.md` | https://github.com/google-gemini/gemini-cli | ①（README 直接確認） |
 
 ## 4. Mark の既存運用（社内一次情報）
@@ -75,7 +75,7 @@ Sakana Fugu と GPT-6 Astra の優位性主張は、いずれも開発元の自�
 | 3a | Claude Code の PostModelSwitch hook | イベントの存在は〔一次確認 2026-10-07〕（hooks 公式文書の一覧）。入力の `from_model`/`to_model` は〔未確認〕 | .claude/hooks/log-model-switch.sh | 実際に `/model` を切り替えて escalations.log を確認 | |
 | 3b | `Edit(/CHARTER.md)` の ask が実際に確認を出すか。リダイレクトは Edit 規則の対象、`sed -i` は対象外 | リダイレクトの扱いは〔一次確認 2026-10-07〕（permissions 公式文書）。実地は〔未確認〕 | .claude/settings.json、guard-protected.sh | このフォルダで起動し CHARTER.md を Edit してみる | |
 | 3c | bypass・auto モードで ask と PreToolUse hook がどう動くか | 〔未確認〕 | 統治全体 | 実地テスト 1 回 | |
-| 4 | Jev の API（`/v1/systemone`、`Bearer`、`{"state": 文字列, "model": "jev-latest", "questions"}`） | 送り先と本文の形は〔Mark の稼働実績〕（分譲指示書）。問いの wire 形式は〔二次のみ〕。価格は〔自己申告〕 | orch/jev.py・orch/decisions.py | Mac で `python3 -m orch.decisions --demo --backend jev` | |
+| 4 | Jev の API（`/v1/systemone`、`Bearer`、`{"state": 文字列, "model": "jev-latest", "questions"}`） | 送り先と本文の形は〔Mark の稼働実績〕（分譲指示書）。問いの wire 形式と応答の形は公式の API リファレンスで確認①（2026-10-08）。価格は〔自己申告〕 | orch/jev.py・orch/decisions.py | Mac で `python3 -m orch.decisions --demo --backend jev` | |
 | 5 | GPT-6 Astra のモデル ID（gpt-6-astra）とフォールバック（gpt-5.6-sol）。TOML のエージェントを `codex exec` から名前で呼べるか | モデル ID は〔Mark の稼働実績〕（分譲指示書）。TOML の呼び出しは〔未確認〕 | tools/codex_*.sh、.codex/agents | Mac の Codex で確認 | |
 | 6 | Sakana の TRINITY／Conductor／Fugu の記述 | 〔二次のみ〕（Fugu README は一次確認） | README §3・§10（着想のみ） | Phase 3 で論文本文 | |
 

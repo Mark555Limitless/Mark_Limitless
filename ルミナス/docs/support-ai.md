@@ -73,9 +73,13 @@
 - 順番: jev（`JEV_ENABLED=1`・`DECISION_BACKEND=jev`・鍵あり）→ anthropic（`claude -p … --tools ""` を Haiku → Sonnet、JSON だけ）→ rules（既定値）。`fallback=False` なら Jev の失敗で既定値
 - 時間の予算 `DecisionBudget`（ミリ秒、既定 `DECISION_TIMEOUT_MS=8000`）。`CYCLE_START_EPOCH` があれば便の残り時間でも打ち切る。**`claude -p` の起動だけで数秒かかることがあり、8 秒では anthropic 経路が毎回時間切れになりうる**。Mac で `--demo --backend anthropic` の所要時間を実測し、足りなければ `.env` の `DECISION_TIMEOUT_MS` を上げる（実測値を digest に残す）
 - 影ログには問いと答えを書き、判断対象の本文は書かない（文字数だけ）。鍵は伏せる
-- 料金は入力10億トークンあたり $42、1問 約 $0.0003、応答 約0.5秒（TypeSafe の自社公表・第三者検証なし）。日本語対応は一次資料に記載が無い
+- 料金は入力10億トークンあたり $42（出力は無料）。2,500 トークンの問い合わせで約 $0.0001。応答は約 0.1 秒（大きな文書で 0.3 秒程度）（TypeSafe の自社公表・第三者検証なし）
+- 言語: 英語が主。CJK を含む他言語も扱うが精度が下がる（公式 Models、2026-10-08 確認）。問いは英語で書き、日本語の文書は評価セットで別に測る
+- 版: 現在は `jev-1.13.0`。`jev-latest` は新版で動くので、閾値を決めたら `.env` の `JEV_MODEL` で版を固定する
+- 流量の上限は毎秒 80 回・10 万トークン（予告なく変わる）。文脈は 1 回 64k トークン（state と最も長い問いで 32k）。Choice は 255 択・Score は 2〜10 段階まで
 - 原本の実績（二重投稿の判定、原本での実測）: 一致度 κ 0.54（補正後 約0.69）、Claude Haiku と同等以上の精度で約45倍速い。それでも最終判断は置き換えていない
-- 問いの wire 形式（`instructions`・`criteria`）は二次情報からの再構成。Mac で原本の `decisions.py` と見比べて合わせる
+- 問いの wire 形式（`type`・`instructions`・`criteria`）と応答の形は、公式の API リファレンスと一致を確認した（2026-10-08）。Score の `score` は段階番号×確率の和（小数）なので、判断層は確率が最大の段階を答えにし、確信度・確率分布は `Decision.raw` と影ログに残す
+- 利用価値・弱点・使い道の詳細は `docs/jev-value-study.md`
 
 ## 6. 各社の条件の確認表（Mark が記入。半年ごとと契約プランの変更時に見直す）
 
@@ -133,5 +137,5 @@
 
 - 原本の `codex_impl.sh`・`decisions.py`・`gemini_writer.py` との差（Mac で見比べる）
 - Codex の `--disable memories`・`--disable multi_agent` の機能名（原本の改良版で使用。ずれていれば `CODEX_DISABLE_FEATURES` で変える）と、古い本体の場所（`CODEX_OLD_BIN`）
-- Jev の問いの wire 形式と応答の各フィールド名
+- Jev の応答の形を本物で確かめる（公式の API リファレンスとは一致を確認済み。Mac で `--demo --backend jev`）
 - `claude -p … --tools ""` の挙動（原本で稼働中の形をそのまま使用）
