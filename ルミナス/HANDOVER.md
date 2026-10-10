@@ -3,6 +3,19 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-10 全体停止 A が Opus の審査で APPROVE → コミット（司令塔: Claude Fable 5.1）
+- 状態: 全体停止 A（`tools/`・`orch/`・`tests/`・指示書）をコミット。審査 1 回目 REJECT（中5・軽6・任意2）→ 全件反映・試験 11 件追加 → 2 回目 APPROVE（助言 軽3・任意4）→ 7 件を提示どおり反映 → 変化分の確認も APPROVE（残る任意 2 件は次の機会）。試験: pytest 208 件（3.13）・審査役の 3.9 環境で判断層ほか 103 件・hooks 62 件が通過
+- 何ができるか: `bash tools/luminous_halt.sh on 理由` で印 `data/.luminous_halt` を作ると、Codex のラッパー（impl・opinion）・判断層（decisions・jev）・Gemini・health が止まる（終了コード 7、台帳には status=error で 1 行）。実行中の Codex にはラッパーの PID だけに TERM を送り、ラッパーが Codex のグループを止める。実行中に Codex が印を消しても、Codex が書けない置き場の `halt.log` と突き合わせて違反（3・`data/.codex_violation`）にし、印を作り直す。`off` は Mark が端末で「解除」と打つ。Codex の実行中の `off` は断る。`status` で理由を表示
+- バグ修正の記録（なぜ・何を・今後）:
+  - 審査 1 回目の中 5 件。(1) 起動直後の停止が届かない: 子の python が `setsid` を済ませる前にグループへ送っていた → 起動用 python が `setsid` の直後・`execv` の前に印を見て 7 で終わり、bash は PID とグループの両方へ TERM。(2) opinion が準備中の中断でも Codex を起動する後退: `trap 'exit 130'` を on_signal に替えたときに起動直前の確認を落としていた → 起動直前に中断なら 130・停止なら 7。(3) halt スクリプトがグループへ TERM し、ラッパーが前面で動かす検査器まで殺して偽の違反: → TERM はラッパーの PID だけ。(4) 実行中にできた印を Codex が消すと前後比較に写らず検出不能: → 二重の守り（on の記録を Codex が書けない置き場にも残してラッパーが突き合わせる＋TERM 後に halt スクリプトが作り直す）。(5) bash 3.2 の `set -u` で引数 0 個の `"$@"` が落ちる: → `${1+"$@"}`・`"${*:-}"`（Mac での実地確認は B.6 に）
+  - 自分で見つけた 1 件。TERM の後にラッパーの終了を待つ処理が、ゾンビ（終わったが親が刈り取っていない）を `kill -0` で「生きている」と判定し 60 秒待ち続けた → `ps -o stat=` が `Z` なら終了扱い（TERM の送り先からも除外）。今後: プロセスの生死は `kill -0` だけで判定しない
+  - 今後の設計の決まり: 競合（起動の前後・印を消す経路）は、外から観測できる記録（安全な置き場のログ）で裏を取る。審査役の再現スクリプトは scratchpad（コンテナ限り）に残した
+- Mac で確かめること（指示書 B.6）: `chflags uchg` が付く／`/bin/bash`（3.2）で理由なしの `on`／`ps` の実パス一致で TERM が届く／Codex のサンドボックスが `setsid` を許す／端末とラッパーで `halt.log` の置き場（`LUMINOUS_SAFE_DIR`・`XDG_CACHE_HOME`・`HOME`）が同じ
+- 残り（任意 2 件、次の機会）: 印を書く `>` を `set -C` にする（symlink の隙）／ラッパーが先に印を作り直した場合も `after_term` が Mark の端末に警告して 3 を返す
+- 運用の注記: ラッパーは PROJ から（または絶対パスで）起動する。親フォルダから相対パスで起動すると halt スクリプトは TERM を送らない（安全側。ラッパー自身が実行後に記録と印を見て止まる）
+- Mark の問い「クラウドから Mac デスクトップ版に切り替えたらできることが増えるか」→ 増える。hooks・権限・Codex の直接呼び出し・鍵・全体停止の実効性は Mac でだけ。使い分け: 実行・Codex・鍵・停止は Mac、調査・起草・対話はクラウド。切替時は Mac で同じブランチを pull してから `claude` を起動
+- 次の一手: B（hooks・`settings.json`）の差分 `docs/proposals/20261010-global-halt-part-b.md` を Mark が承認 → 適用 → `scripts/test-hooks.sh` → Opus 審査 → Mac の新しいセッションで実地確認（Phase 1 の門）。ネットワークは Mark が後で Custom に戻す
+
 ## 2026-10-10 Mark の決定 5 点と、全体停止の実装の開始（司令塔: Claude Fable 5.1）
 - **Mark の決定（原文）**: 「1はい、2はMac、3はあなた(Claude Code)、4はあとで戻します、5は置いてよい」→ 初期用途＝証拠付きメモ／Phase 1 の司令塔は Mac／全体停止の実装は司令塔／ネットワークは後で Custom に戻す／別セッションの記録はリポジトリに置いてよい。記録: `state/decisions/20261010-phase-decisions.md`
 - Codex の返事（第 1 巡）が届いた（`docs/astra-replies/20261010-codex-reply-r1.md`）。Codex が示したコミット `78f0a3486236` と文書の SHA-256 は実物と一致（Codex は公開側の回答を読んでいる）。採用点 1〜5 は司令塔の回答 §3 と一致し、設計は両者で揃った。3 つのハッシュ・主張単位の失効・許可マニフェストへの分離署名・共通ルールは差分表の後に既存文書へ、を採用（`docs/brainstorm/20261010-codex-joint-design-review.md` §8）。残る調整: Codex が Mac 側に作る連携 job 台帳・outbox/inbox/receipt の置き場所と、指示書を先に出せるか（第 2 巡の質問）
