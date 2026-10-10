@@ -3,6 +3,26 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-10 Mac デスクトップ版への切替（司令塔: Claude Fable 5.1 → 次は Mac の司令塔）
+- Mark の指示（原文）: 「クラウドセッション版からMacデスクトップ版に戻してください。それにより改善されるものがないか監査して、改善および修復できるものは即実行してください。」「B を適用してよい」
+- 状態: 全体停止 A・B ともコミット済み（A `76f8458`、B `c454b45`、Mark の決定の記録 `3e40e1c`）。クラウドのこのセッションは、Mac の司令塔が動き始めたら調査・起草・対話の窓口に退く
+- **Mac で最初に行うこと（順番に。Mark 本人）**
+  1. ターミナルで、GitHub の写しの checkout に入り `git fetch origin claude/dreamy-euler-k2f60s && git checkout claude/dreamy-euler-k2f60s && git pull`（正本フォルダが git 管理外なら、まず写しで動かす。正本との同期は別に決める）
+  2. `cd ルミナス && bash scripts/setup.sh`（git フック・.venv・docx の依存。鍵は扱わない）。`python3 --version` と `/bin/bash --version` を控える（3.9 と 3.2 が前提）
+  3. 試験を Mac で回す（Linux で通っただけなので、ここが Phase 0 の門）: `bash scripts/test-hooks.sh`（105 件）と `.venv/bin/python -m pytest tests -q`（208 件）。落ちた試験はそのまま HANDOVER に貼る（直すのは司令塔）
+  4. **ルミナスのフォルダで** Claude Code を起動する。方法は 2 つ。(a) このクラウドのセッションを続ける: `claude --teleport session_015TC27mfQ8WzURcC1FZN7My`（同じリポジトリの checkout の中で。ウェブの画面の「Open in → Terminal」でも同じコマンドが出る）。(b) 新しく始める: `claude`、またはデスクトップアプリで New session → Local → Project folder にルミナスのフォルダ（worktree のオプションは使わない）。どちらも「開始したフォルダ」の `.claude/settings.json` が読まれるので、**必ずルミナスのフォルダで**
+  5. 起動したら、hooks が効いているかを確かめる: Bash で `true luminous-hook-canary` → 「canary: hooks は効いています」と**断られる**こと。`ls state/.sessions/` に開始の印があること。初回に hooks の確認が出たら内容を見て承認
+  6. 全体停止の実地確認: 別のターミナルで `bash tools/luminous_halt.sh on 試験` → Claude Code 側で Edit・Bash が「全体停止中」で止まること、Read が通ること → `bash tools/luminous_halt.sh status` → `bash tools/luminous_halt.sh off`（「解除」と入力）→ 動くこと。印に `chflags uchg` が付いたか `ls -lO data/` で見る（off で外れる）
+  7. 環境変数: デスクトップアプリは `.zshrc` の `export` を引き継がない。`LUMINOUS_OBSIDIAN_DIR` などは `.claude/settings.local.json` の `env`（例 `.claude/settings.local.json.example`）か、アプリの Local 環境の設定で渡す。`LUMINOUS_SAFE_DIR`・`XDG_CACHE_HOME`・`HOME` は端末と Claude Code で同じにする（全体停止の記録の突き合わせが 1 つの `halt.log` を見るため）
+  8. 鍵（Gemini・Jev）は `bash tools/set_env_key.sh GEMINI_API_KEY` / `TYPESAFE_API_KEY` で `.env` へ（チャットに貼らない）。Codex は ChatGPT アプリにログイン。点検は `.venv/bin/python -m orch.health`
+  9. 結果（版・試験の数・止まったか）を HANDOVER に書く。ここまでが Phase 0 の門（許可台帳の前提 1・2）
+- **Mac に切り替えて改善されること（事実）**: hooks と権限が効く（クラウドでは読み込まれていなかった）／Codex を `tools/codex_impl.sh`・`codex_opinion.sh` で直接呼べる（中継が要らない）／`.env` の鍵で Gemini・Jev の実呼び出しと本物の点検／全体停止 A・B の実効性／Obsidian 同期・docx 再生成（SessionEnd）／許可台帳の前提を満たせる
+- **クラウドに残る役割**: 外出先からの対話、Web の広い調査、公開文書の起草。Mac が眠っていても進む。全体停止はクラウドには効かない（アプリの画面で止める）
+- 監査（Mac 切替で壊れる・効かない点、Workflow 7 観点＋反証）: 進行中。確定した指摘は次の節で反映する
+- 今日のそのほか: 許可台帳の Mark の決定 4 点を ADR に記録（`state/decisions/20261010-autonomy-grants-decisions.md`。順番は推奨どおり／クラウドでは使わない／Touch ID などの鍵の承認タグで様子を見る／最初は「Mac」= Mac 内で完結する操作と読む、要確認）。署名鍵の手順書 `docs/mark-signing-key.md` v0.1 を起草（推奨 Secretive の Secure Enclave 鍵 → ハードウェアキー。1Password は本件で非推奨。Opus の反証審査中、未コミット）
+- B の審査で直した点（なぜ・何を・今後）: (1) 保護対象に `luminous_halt` を足したことで `bash tools/luminous_halt.sh on … 2>&1` が誤って止まった → on/status は 1 行で `; | & < > $( )` バッククォートが無ければ通す。最初の素通しは `$( )`・`>` を許していて危なかった（理由はシェルが先に実行・リダイレクトする）→ 除外。(2) 私がインタプリタの旗の判定を狭めて `perl -pi -e` などを通してしまった → 前の広い一致に戻し `-m` だけを外す。今後: 守りの正規表現を「狭める」変更は、必ず回避の形を試験に足してから。(3) 複数行の判定で `"$(printf '\n')"` が空文字になり全部に当たっていた → `$'\n'`。今後: 改行の比較は `$'\n'` を使う
+- 次の一手: Mac の司令塔が上の 1〜9 を行い結果を書く → 監査の確定分を反映（クラウドの司令塔） → 署名鍵の手順書の審査 → Mark が鍵を用意 → 許可台帳の仕上げの反証審査 → 適用
+
 ## 2026-10-10 全体停止 A が Opus の審査で APPROVE → コミット（司令塔: Claude Fable 5.1）
 - 状態: 全体停止 A（`tools/`・`orch/`・`tests/`・指示書）をコミット。審査 1 回目 REJECT（中5・軽6・任意2）→ 全件反映・試験 11 件追加 → 2 回目 APPROVE（助言 軽3・任意4）→ 7 件を提示どおり反映 → 変化分の確認も APPROVE（残る任意 2 件は次の機会）。試験: pytest 208 件（3.13）・審査役の 3.9 環境で判断層ほか 103 件・hooks 62 件が通過
 - 何ができるか: `bash tools/luminous_halt.sh on 理由` で印 `data/.luminous_halt` を作ると、Codex のラッパー（impl・opinion）・判断層（decisions・jev）・Gemini・health が止まる（終了コード 7、台帳には status=error で 1 行）。実行中の Codex にはラッパーの PID だけに TERM を送り、ラッパーが Codex のグループを止める。実行中に Codex が印を消しても、Codex が書けない置き場の `halt.log` と突き合わせて違反（3・`data/.codex_violation`）にし、印を作り直す。`off` は Mark が端末で「解除」と打つ。Codex の実行中の `off` は断る。`status` で理由を表示
