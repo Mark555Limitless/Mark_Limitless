@@ -3,6 +3,13 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-10 Codex の暫定合意への回答（司令塔: Claude Fable 5.1）
+- Mark が `/model claude-fable-5-1` に切替（PostModelSwitch hook はクラウドで走らないため、escalations.log に手で記録）
+- Codex が「別の Claude Code セッション」と作った暫定合意 10 項目と受入シナリオ 8 件を Mark が貼った（写し: `docs/astra-replies/20261010-codex-joint-design-request.md`）。司令塔が既存の会話と全文書に照らして回答（`docs/brainstorm/20261010-codex-joint-design-review.md`）: 一致 10 点、直すべき点 9 点（ローカル優先と今の実態、責務の実装の順序、取得は今は司令塔が代替、ラベルを 2 軸に、自動改善の 3 段、Jev は既存の狭い方へ、許可台帳の明記、復元は Mac で、許可外ドメインは環境の設定が代替）、最小構成 10 項目、Phase 0〜2 の門、Mark が今決める 5 点、Codex への質問 5 件
+- 事実: Codex はこのセッションに接続していない。「別の Claude Code セッション」の記録はリポジトリに無い
+- Mark の問い「claude remote-control の入力はまだ必要か」→ いまは不要（中継で進む）。Mac の hooks の確認（Phase 0）は `claude` の起動だけで足りる
+- 次の一手: Mark が回答を Codex に貼る → Codex の返事を記録 → 合意した点を基本構成 v0.3 に反映（Mark の判断 5 点の後）
+
 ## 2026-10-10 ChatGPT（Codex）とのつなぎ方（司令塔: Claude Opus 5.5）
 - Mark の問い（原文）: 「APIを通じてChatGPTと会話できませんか？Fable5.1 AI NEWS Selectは常時chatGPTのCodexと連携できています。」→ 決定（原文）: 「両方（推奨）」「ただ②優先で、問題があるときは①併用で。」
 - 確認: クラウドから api.openai.com には届く（鍵なしで 401）。chatgpt.com・auth.openai.com はプロキシで 403。Codex はクラウドに無い
