@@ -32,7 +32,10 @@ def codex_line() -> str:
 
 
 def lines(net: bool = True) -> List[str]:
-    out = [codex_line()]
+    out: List[str] = []
+    if config.global_halt():   # 例外は出さず、表示だけ（docs/specs/20261008_global_halt.md）
+        out.append("!!! 全体停止中（data/.luminous_halt）。外部AI・Codex・判断層は動きません。解除は Mark が端末で: bash tools/luminous_halt.sh off")
+    out.append(codex_line())
     out.append(gemini.check_status(net=net, net_timeout=5)[1])
     out.append(jev.status_line())
     return out

@@ -105,3 +105,16 @@ def test_connect_timeout_respects_budget(enabled, monkeypatch, t, expected):
     monkeypatch.setattr(jev.requests, "post", lambda url, **k: seen.update(k) or FakeResp(200, {"answers": {"q": {"noul": 0.5}}}))
     jev.call("s", QS, timeout_s=t)
     assert seen["timeout"] == expected
+
+
+def test_call_halted_raises_without_network_and_counts_no_call(enabled, monkeypatch, isolated_env):
+    from orch import config
+    config.HALT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    config.HALT_PATH.write_text("2026-10-10T00:00:00Z 試験\n", encoding="utf-8")
+    monkeypatch.setattr(jev.requests, "post", _no_call)
+    with pytest.raises(config.GlobalHalt):
+        jev.call("s", QS, purpose="t")
+    led = read_ledger(isolated_env)
+    assert led and led[-1]["status"] == "skip" and led[-1].get("calls", 1) == 0
+    assert "全体停止中" in jev.status_line()
+

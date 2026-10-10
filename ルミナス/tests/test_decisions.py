@@ -266,3 +266,67 @@ def test_check_cli(capsys, monkeypatch):
     assert decisions.main(["--check"]) == 0
     out = capsys.readouterr().out
     assert "TYPESAFE_API_KEY=あり" in out and "tsk_FAKE" not in out
+
+
+# ---- 全体停止（docs/specs/20261008_global_halt.md）----
+from orch import config as _config
+
+
+def _halt(isolated_env):
+    _config.HALT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _config.HALT_PATH.write_text("2026-10-10T00:00:00Z 試験\n", encoding="utf-8")
+
+
+def test_global_halt_raises_before_any_backend(jev_on, monkeypatch, isolated_env):
+    _halt(isolated_env)
+    monkeypatch.setattr(jev, "call", lambda *a, **k: pytest.fail("呼んではいけない"))
+    monkeypatch.setattr(decisions, "_from_anthropic", lambda *a: pytest.fail("呼んではいけない"))
+    with pytest.raises(_config.GlobalHalt):
+        decisions.ask("s", QS, purpose="t")
+    text = (isolated_env / "data" / "decisions_shadow.jsonl").read_text(encoding="utf-8")
+    assert '"backend": "halt"' in text and "全体停止中" in text and "s\"" not in text.split("state_chars")[0][-5:]
+
+
+def test_halt_between_jev_and_anthropic_raises_instead_of_default(jev_on, monkeypatch, isolated_env):
+    def jev_call(*a, **k):
+        _halt(isolated_env)   # Jev の最中に印ができた
+        raise jev.JevUnavailable("HTTP 500")
+    monkeypatch.setattr(jev, "call", jev_call)
+    monkeypatch.setattr(decisions, "_from_anthropic", lambda *a: pytest.fail("claude -p を呼んではいけない"))
+    with pytest.raises(_config.GlobalHalt):
+        decisions.ask("s", QS)
+
+
+def test_halt_raised_inside_backend_is_shadow_logged_and_propagates(jev_on, monkeypatch, isolated_env):
+    def jev_call(*a, **k):
+        raise _config.GlobalHalt()   # バックエンドの中で印を見た
+    monkeypatch.setattr(jev, "call", jev_call)
+    monkeypatch.setattr(decisions, "_from_anthropic", lambda *a: pytest.fail("claude -p を呼んではいけない"))
+    with pytest.raises(_config.GlobalHalt):
+        decisions.ask("s", QS, purpose="t")
+    text = (isolated_env / "data" / "decisions_shadow.jsonl").read_text(encoding="utf-8")
+    assert text.count('"backend": "halt"') == 1 and "全体停止中" in text
+
+
+def test_global_halt_is_not_swallowed_by_except_exception():
+    try:
+        raise _config.GlobalHalt()
+    except Exception:  # noqa: BLE001
+        pytest.fail("except Exception で飲み込まれてはいけない")
+    except _config.GlobalHalt:
+        pass
+
+
+def test_global_halt_sees_dangling_symlink_and_ignores_data_dir_env(monkeypatch, isolated_env):
+    _config.HALT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink("/nonexistent/luminous-halt-target", _config.HALT_PATH)
+    monkeypatch.setenv("ORCH_DATA_DIR", str(isolated_env / "elsewhere"))
+    assert _config.global_halt() and _config.disabled("jev") and _config.disabled("gemini") and _config.disabled("codex")
+
+
+def test_demo_exits_7_and_check_reports_when_halted(isolated_env, capsys):
+    _halt(isolated_env)
+    assert decisions.main(["--demo", "--backend", "rules"]) == 7
+    assert decisions.main(["--check"]) == 0
+    assert "全体停止中" in capsys.readouterr().out
+

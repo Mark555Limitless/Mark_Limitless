@@ -252,7 +252,19 @@ def _child_env() -> Dict[str, str]:
     return env
 
 
+def _halt_shadow(state: str, questions: Dict[str, Question], purpose: str) -> None:
+    """全体停止で呼ばなかったことを影ログに残す（判断対象の本文は書かない）。"""
+    _shadow({
+        "ts": config.ts(), "purpose": purpose[:80], "backend": "halt", "reason": "全体停止中", "ms": 0,
+        "state_chars": len(state),
+        "questions": {k: {"type": type(q).__name__.lower(), "prompt": q.prompt} for k, q in questions.items()},
+        "answers": {}, "jev": {},
+    })
+
+
 def _from_anthropic(state: str, questions: Dict[str, Question], budget: "DecisionBudget", purpose: str) -> Dict[str, Any]:
+    if config.global_halt():
+        raise config.GlobalHalt()
     claude = shutil.which("claude")
     if not claude:
         raise RuntimeError("claude CLI なし")
@@ -262,6 +274,8 @@ def _from_anthropic(state: str, questions: Dict[str, Question], budget: "Decisio
     workdir = tempfile.mkdtemp(prefix="luminous-decide-")  # プロジェクトの外で起動する（project hooks を走らせない）
     try:
         for model in config.MODEL_LADDER:
+            if config.global_halt():   # 前のモデルの途中で印ができた場合も、次の claude -p を起動しない
+                raise config.GlobalHalt()
             left = budget.remaining_ms()
             if left < 500:
                 last = "時間切れ"
@@ -325,7 +339,14 @@ def ask(
     answers: Optional[Dict[str, Any]] = None
     meta: Dict[str, Any] = {}
     used = "rules"
+    # 全体停止中は外部AIも claude -p も呼ばず、既定値でも続けない（不変条件 4 の例外。docs/specs/20261008_global_halt.md）
+    if config.global_halt():
+        _halt_shadow(state, questions, purpose)
+        raise config.GlobalHalt()
     for step in order:
+        if config.global_halt():   # Jev を呼んだ後・claude -p の前に印ができた場合
+            _halt_shadow(state, questions, purpose)
+            raise config.GlobalHalt()
         left = budget.remaining_ms()
         if left < 500:
             reasons.append(f"{step}: 時間切れ")
@@ -339,6 +360,9 @@ def ask(
                 answers = _from_anthropic(state, questions, budget, purpose)
             used = step
             break
+        except config.GlobalHalt:   # jev.call や claude -p の梯子の途中で印ができた
+            _halt_shadow(state, questions, purpose)
+            raise
         except (jev.JevUnavailable, RuntimeError) as e:
             reasons.append(f"{step}: {e.args[0] if e.args else type(e).__name__}")
         except Exception as e:  # noqa: BLE001 想定外の失敗でも本流を止めず既定値へ（生のメッセージは書かない）
@@ -368,6 +392,8 @@ def main(argv: Optional[list] = None) -> int:
         print(f"decisions: JEV_ENABLED={config.env('JEV_ENABLED', '0')} DECISION_BACKEND={config.env('DECISION_BACKEND', 'jev')} "
               f"TYPESAFE_API_KEY={'あり' if config.env('TYPESAFE_API_KEY') else 'なし'} claude={'あり' if shutil.which('claude') else 'なし'}")
         print(jev.status_line())
+        if config.global_halt():
+            print("decisions: 全体停止中（data/.luminous_halt）。判断層は外部AIも claude -p も呼びません")
         return 0
     if a.demo:
         qs: Dict[str, Question] = {
@@ -375,7 +401,11 @@ def main(argv: Optional[list] = None) -> int:
             "polite": Score("この文章の丁寧さ", ["くだけている", "普通", "丁寧"], 1),
             "question": Noul("この文章は質問か", 0.5),
         }
-        d = ask("明日の東京は晴れるでしょうか。", qs, backend=a.backend, purpose="demo")
+        try:
+            d = ask("明日の東京は晴れるでしょうか。", qs, backend=a.backend, purpose="demo")
+        except config.GlobalHalt as e:
+            print(f"decisions: {e}", file=sys.stderr)
+            return config.HALT_EXIT_CODE
         print(json.dumps({"backend": d.backend, "answers": d.answers, "reason": d.reason, "ms": d.ms, "jev": d.raw}, ensure_ascii=False))
         return 0
     ap.print_help()

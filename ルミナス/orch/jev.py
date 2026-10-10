@@ -74,8 +74,29 @@ def _usd(resp_json: Any, n_questions: int) -> float:
     return FALLBACK_USD_PER_QUESTION * max(n_questions, 1)
 
 
+def _log_skip(model: str, purpose: str, reason: str) -> None:
+    """呼ばなかったことを記録する（回数には数えない）。"""
+    line = {"ts": config.ts(), "status": "skip", "calls": 0, "usd": 0.0, "http": None, "model": model, "ms": 0,
+            "purpose": purpose[:80], "reason": reason}
+    try:
+        path = config.log_dir() / "jev.log"
+        with config.file_lock(path.with_suffix(".lock")):
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(config.redact(json.dumps(line, ensure_ascii=False)) + "\n")
+    except OSError:
+        pass
+    try:
+        usage.record("jev", model=model, purpose=purpose, calls=0, usd=0.0, status="skip", ms=0, extra={"reason": reason})
+    except OSError:
+        pass
+
+
 def call(state: str, questions: Dict[str, Dict[str, Any]], *, timeout_s: float = 8.0, purpose: str = "") -> Dict[str, Any]:
-    """Jev に問い合わせ、answers の辞書を返す。呼ばなかった・失敗したときは JevUnavailable（失敗も1回に数える）。"""
+    """Jev に問い合わせ、answers の辞書を返す。呼ばなかった・失敗したときは JevUnavailable（失敗も1回に数える）。
+    全体停止中は GlobalHalt（失敗ではなく本流も止める。docs/specs/20261008_global_halt.md）。"""
+    if config.global_halt():
+        _log_skip(config.env("JEV_MODEL", "jev-latest") or "jev-latest", purpose, "全体停止中")
+        raise config.GlobalHalt()
     key = config.env("TYPESAFE_API_KEY")
     if config.env("JEV_ENABLED", "0") != "1":
         raise JevUnavailable("無効（JEV_ENABLED!=1）")
@@ -121,6 +142,6 @@ def call(state: str, questions: Dict[str, Dict[str, Any]], *, timeout_s: float =
 def status_line() -> str:
     key = "あり" if config.env("TYPESAFE_API_KEY") else "なし"
     on = "有効" if config.env("JEV_ENABLED", "0") == "1" else "無効"
-    stop = "停止中" if config.disabled("jev") else "稼働"
+    stop = "全体停止中" if config.global_halt() else ("停止中" if config.disabled("jev") else "稼働")
     return (f"jev: 鍵={key} {on} {stop} 本日 {usage.today_calls('jev')}/{config.env_int('ORCH_JEV_DAILY_MAX', 60)}回 "
             f"今月 ${usage.month_usd('jev'):.4f}／上限 ${config.env_float('ORCH_JEV_MONTHLY_USD', 1.0):.2f}")

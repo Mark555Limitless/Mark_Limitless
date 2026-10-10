@@ -114,7 +114,7 @@ def _log(model: str, res: Result, sec: float, usd: float, purpose: str) -> None:
                 fh.write(config.redact(line) + "\n")
     except OSError:
         pass
-    status = "ok" if res.rc == 0 else ("skip" if res.reason in ("停止中", "上限到達", "鍵なし") else "error")
+    status = "ok" if res.rc == 0 else ("skip" if res.reason in ("停止中", "上限到達", "鍵なし", "全体停止中") else "error")
     try:
         usage.record("gemini", model=model, purpose=purpose, calls=0 if status == "skip" else 1,
                      in_tokens=tin, out_tokens=tout + think, usd=usd, status=status, ms=int(sec * 1000))
@@ -167,6 +167,9 @@ def generate(
         _log(m, res, time.monotonic() - t0, usd, purpose)
         return res
 
+    if config.global_halt():   # 全体停止は失敗ではなく本流も止める（docs/specs/20261008_global_halt.md）
+        finish(Result(config.HALT_EXIT_CODE, "全体停止中"))
+        raise config.GlobalHalt()
     if config.disabled("gemini"):
         return finish(Result(2, "停止中"))
     key = config.env("GEMINI_API_KEY")
@@ -218,6 +221,8 @@ def check_status(*, net: bool = True, net_timeout: float = 20) -> Tuple[bool, st
     """鍵の有無・短い疎通確認（本文は送らない）・当日の支出と上限を1行で返す。"""
     m = _model(None)
     spend = f"本日 ${daily_usd():.2f}／上限 ${daily_cap():.2f}"
+    if config.global_halt():
+        return False, f"gemini: 全体停止中 model={m} {spend}"
     if config.disabled("gemini"):
         return False, f"gemini: 停止中 model={m} {spend}"
     key = config.env("GEMINI_API_KEY")
@@ -253,8 +258,12 @@ def main(argv: Optional[list] = None) -> int:
     if not prompt.strip():
         print("gemini: 標準入力にプロンプトがありません", file=sys.stderr)
         return 2
-    res = generate(prompt, model=a.model, thinking=a.thinking or config.env("ORCH_GEMINI_THINKING", "high"),
-                   timeout=a.timeout, purpose=a.purpose)
+    try:
+        res = generate(prompt, model=a.model, thinking=a.thinking or config.env("ORCH_GEMINI_THINKING", "high"),
+                       timeout=a.timeout, purpose=a.purpose)
+    except config.GlobalHalt as e:
+        print(f"gemini: {e}", file=sys.stderr)
+        return config.HALT_EXIT_CODE
     if res.rc == 0:
         sys.stdout.write(res.text)
     else:

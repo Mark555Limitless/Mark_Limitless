@@ -20,6 +20,8 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_SKIP_DOTENV", "1")
     monkeypatch.setenv("ORCH_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ORCH_LOG_DIR", str(tmp_path / "logs"))
+    from orch import config as _config  # 全体停止の印の場所を一時ディレクトリへ（本物の data/ を見ない）
+    monkeypatch.setattr(_config, "HALT_PATH", tmp_path / "data" / ".luminous_halt")
     for v in SECRET_VARS + FLAG_VARS:
         monkeypatch.delenv(v, raising=False)
     yield tmp_path

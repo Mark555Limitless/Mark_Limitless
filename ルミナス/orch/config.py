@@ -84,8 +84,28 @@ def log_dir() -> Path:
     return p
 
 
+# 全体停止の印（docs/specs/20261008_global_halt.md）。場所はパッケージの位置から決めて固定し、環境変数では動かさない。
+# テストでは tests/conftest.py がこの定数を一時ディレクトリへ差し替える（本物の data/ を見ない）
+HALT_PATH = ROOT / "data" / ".luminous_halt"
+HALT_EXIT_CODE = 7  # コマンドとして呼ばれたときの終了コード（codex_opinion.sh の 6 と重ならない）
+
+
+class GlobalHalt(BaseException):
+    """全体停止中。失敗ではなく本流も止める（不変条件 4 の例外）。except Exception で飲み込まれないよう BaseException から派生。"""
+
+    def __init__(self, message: str = "全体停止中（data/.luminous_halt）") -> None:
+        super().__init__(message)
+
+
+def global_halt() -> bool:
+    """全体停止の印があるか。ファイルでもリンクでも（リンク先が無くても）名前があれば停止中。"""
+    return os.path.lexists(str(HALT_PATH))
+
+
 def disabled(vendor: str) -> bool:
-    """停止スイッチ: 環境変数 ORCH_<VENDOR>=0 か、data/.<vendor>_disabled があれば止める。"""
+    """停止スイッチ: 全体停止中、環境変数 ORCH_<VENDOR>=0、data/.<vendor>_disabled のどれかで止める。"""
+    if global_halt():
+        return True
     flag = env(f"ORCH_{vendor.upper()}")
     if flag is not None and flag.strip().lower() in ("0", "false", "off", "no"):
         return True

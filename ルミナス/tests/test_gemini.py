@@ -183,3 +183,20 @@ def test_exception_text_with_key_is_not_logged(keyed, monkeypatch, isolated_env)
     gemini.generate("x")
     assert KEY not in (isolated_env / "logs" / "gemini.log").read_text(encoding="utf-8")
     assert KEY not in (isolated_env / "data" / "usage.jsonl").read_text(encoding="utf-8")
+
+
+def test_generate_halted_raises_and_check_reports(keyed, monkeypatch, isolated_env):
+    import io
+    from orch import config
+    config.HALT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    config.HALT_PATH.write_text("2026-10-10T00:00:00Z 試験\n", encoding="utf-8")
+    monkeypatch.setattr(gemini.requests, "post", _no_call)
+    with pytest.raises(config.GlobalHalt):
+        gemini.generate("x", purpose="t")
+    led = read_ledger(isolated_env)
+    assert led and led[-1]["status"] == "skip"
+    ok, line = gemini.check_status(net=False)
+    assert not ok and "全体停止中" in line
+    monkeypatch.setattr(gemini.sys, "stdin", io.StringIO("こんにちは"))
+    assert gemini.main(["gen"]) == 7
+

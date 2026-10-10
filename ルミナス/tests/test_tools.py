@@ -43,6 +43,8 @@ case "$FAKE_MODE" in
   glob) echo "# glob" >> orch/config.py ;;
   pycache) mkdir -p orch/__pycache__ .pytest_cache && echo x > orch/__pycache__/evil.cpython-39.pyc && echo x > .pytest_cache/v ;;
   opinion) echo "意見です" ;;
+  halt_during) mkdir -p data && printf '%s test\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > data/.luminous_halt; exit 1 ;;
+  halt_eraser) trap 'rm -f data/.luminous_halt; exit 1' TERM; i=0; while [ "$i" -lt "${FAKE_ERASER_N:-300}" ]; do rm -f data/.luminous_halt; sleep 0.1; i=$((i+1)); done ;;
   nestedgit) git init -q . && printf '#!/bin/sh\ntouch "%s"\n' "$FAKE_PWNED" > .git/fsm.sh && chmod +x .git/fsm.sh && git config core.fsmonitor "$PWD/.git/fsm.sh" ;;
   nestedgit_sub) git init -q orch && printf '#!/bin/sh\ntouch "%s"\n' "$FAKE_PWNED" > orch/.git/fsm.sh && chmod +x orch/.git/fsm.sh && git -C orch config core.fsmonitor "$PWD/orch/.git/fsm.sh" ;;
   gitconfig) printf '#!/bin/sh\ntouch "%s"\n' "$FAKE_PWNED" > "$FAKE_PWNED.sh" && chmod +x "$FAKE_PWNED.sh" && git config core.fsmonitor "$FAKE_PWNED.sh" ;;
@@ -587,3 +589,352 @@ def test_set_env_key_stops_if_backup_fails(proj, tmp_path):
     env = dict(os.environ, LUMINOUS_PRIVATE_DIR=str(blocker), ORCH_GEMINI="0")
     rc, out, err = run_tty(["bash", "tools/set_env_key.sh", "GEMINI_API_KEY"], p, env, "newvalue\n")
     assert rc == 1 and (p / ".env").read_text(encoding="utf-8") == "GEMINI_API_KEY=old\n"
+
+
+# ---- 全体停止（docs/specs/20261008_global_halt.md）----
+import hashlib
+import signal
+import time
+
+
+def _halt_path(proj):
+    return proj[0] / "data" / ".luminous_halt"
+
+
+def _make_halt(proj, text="2026-10-10T00:00:00Z 試験\n"):
+    _halt_path(proj).parent.mkdir(exist_ok=True)
+    _halt_path(proj).write_text(text, encoding="utf-8")
+
+
+def _halt_cmd(proj, *args, stdin=subprocess.DEVNULL):
+    return subprocess.run(["bash", "tools/luminous_halt.sh", *args], cwd=proj[0], env=env_for(proj, "x"),
+                          capture_output=True, text=True, stdin=stdin, timeout=90)
+
+
+def _safe_halt_log(proj):
+    return proj[3] / "luminous-codex" / "halt.log"
+
+
+def _wait_launch(proj, timeout=30):
+    """偽の codex が起動した（引数を記録した）まで待つ。起動の前に印を作ると、ラッパーは起動せずに 7 で終わるため"""
+    log = proj[2]
+    for _ in range(timeout * 10):
+        if log.exists() and log.read_text().strip():
+            return
+        time.sleep(0.1)
+    raise AssertionError("偽の codex が起動しない")
+
+
+def _wait_owner(p, timeout=20):
+    owner = p / "data" / "codex_runs" / ".lock" / "owner"
+    for _ in range(timeout * 10):
+        if owner.exists() and owner.read_text().strip():
+            return owner
+        time.sleep(0.1)
+    raise AssertionError("ロックの持ち主が書かれない")
+
+
+def test_halt_marker_before_run_is_7_without_launch(proj):
+    _make_halt(proj)
+    r = run(proj, "allowed")
+    assert r.returncode == 7 and "全体停止中" in r.stderr, (r.stdout, r.stderr)
+    assert calls(proj) == [] and not (proj[0] / "data" / "codex_runs" / ".lock").exists()
+
+
+def test_halt_marker_as_dangling_symlink_is_7(proj):
+    (proj[0] / "data").mkdir(exist_ok=True)
+    os.symlink("/nonexistent/luminous-halt-target", _halt_path(proj))
+    r = run(proj, "allowed")
+    assert r.returncode == 7 and calls(proj) == []
+
+
+def test_halt_created_during_run_is_7_without_retry_or_violation(proj):
+    r = run(proj, "halt_during", extra_env={"CODEX_FALLBACK_MODEL": "gpt-5.6-sol"})
+    assert r.returncode == 7, (r.stdout, r.stderr)
+    assert len(calls(proj)) == 1  # 失敗しても別のモデルでやり直さない
+    assert not (proj[0] / "data" / ".codex_violation").exists()  # 印の作成は違反ではない
+    assert _halt_path(proj).exists()
+
+
+@pytest.mark.parametrize("own_session", [False, True])
+def test_halt_terminated_impl_wrapper_exits_7(proj, tmp_path, own_session):
+    p = proj[0]
+    proc = subprocess.Popen(["bash", "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p, env=env_for(proj, "sleep"),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=own_session)
+    try:
+        _wait_launch(proj)
+        time.sleep(0.3)
+        t0 = time.monotonic()
+        r = _halt_cmd(proj, "on", "試験で止める")
+        assert r.returncode == 0 and "TERM を送りました" in r.stdout, (r.stdout, r.stderr)
+        out, err = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 7, (out, err)
+    assert time.monotonic() - t0 < 25  # 偽の codex（sleep 30）を待たずに止めた
+    assert not (p / "data" / "codex_runs" / ".lock").exists()
+    assert not (p / "data" / ".codex_violation").exists()  # 印は残っているので違反ではない
+    assert _halt_path(proj).exists() and "再作成" not in _halt_path(proj).read_text(encoding="utf-8")
+    assert len(calls(proj)) == 1
+    assert _safe_halt_log(proj).read_text(encoding="utf-8").count(" on ") == 1
+    rows = [json.loads(l) for l in (tmp_path / "data" / "usage.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert rows[-1]["vendor"] == "codex" and rows[-1]["status"] == "error" and rows[-1]["purpose"] == "s"  # 起動はした
+
+
+def test_halt_eraser_codex_deleting_marker_is_violation_and_marker_recreated(proj):
+    """実行中の Codex が印を消し続ける: ラッパーは安全な置き場の halt.log と突き合わせて違反（3）、
+    luminous_halt.sh は印を作り直して 3 を返す。"""
+    p = proj[0]
+    proc = subprocess.Popen(["bash", "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p, env=env_for(proj, "halt_eraser"),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        _wait_launch(proj)
+        time.sleep(0.3)
+        r = _halt_cmd(proj, "on", "消す Codex を止める")
+        out, err = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 3 and "Codex が消した疑い" in err, (out, err)
+    assert _halt_path(proj).exists() and "Codex が消した疑い" in _halt_path(proj).read_text(encoding="utf-8")  # ラッパーが作り直した
+    assert r.returncode == 0 and "TERM を送りました" in r.stdout and "作り直しました" not in r.stderr, (r.stdout, r.stderr)  # 終了を待った時点で印はある
+    assert (p / "data" / ".codex_violation").exists()
+    assert not (p / "data" / "codex_runs" / ".lock").exists()
+    assert (p / "logs" / "halt.log").read_text(encoding="utf-8").count(" on ") == 1
+    assert _safe_halt_log(proj).read_text(encoding="utf-8").count(" on ") == 1
+    assert len(calls(proj)) == 1  # やり直しはしない
+
+
+def test_halt_eraser_env_mismatch_falls_back_to_recreate_by_halt_script(proj):
+    """ラッパーの安全な置き場が halt スクリプトと別（環境変数の不一致）だと、ラッパー側の突き合わせは効かない。
+    その場合も TERM の後の after_term が印を作り直し、3 で知らせる。"""
+    p = proj[0]
+    other = Path.home() / ".cache" / f"luminous-test-{uuid.uuid4().hex[:8]}"
+    proc = subprocess.Popen(["bash", "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p,
+                            env=env_for(proj, "halt_eraser", {"XDG_CACHE_HOME": str(other)}),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        _wait_launch(proj)
+        time.sleep(0.3)
+        r = _halt_cmd(proj, "on", "置き場が別")
+        out, err = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        shutil.rmtree(other, ignore_errors=True)
+    assert r.returncode == 3 and "TERM を送りました" in r.stdout and "作り直しました" in r.stderr, (r.stdout, r.stderr)
+    assert proc.returncode in (7, 130) and "Codex が消した疑い" not in err, (out, err)  # ラッパーは気づけない
+    assert not (p / "data" / ".codex_violation").exists()
+    assert _halt_path(proj).exists() and "TERM の後に印が消えていた" in _halt_path(proj).read_text(encoding="utf-8")
+    assert (p / "logs" / "halt.log").read_text(encoding="utf-8").count(" on ") == 2
+
+
+def test_halt_wrapper_launched_from_parent_dir_detects_erased_marker_without_term(proj):
+    """親フォルダから相対パスで起動されたラッパーには TERM を送らない（実パスが一致しない。安全側）。
+    それでもラッパーは実行後に安全な置き場の halt.log と突き合わせ、消された印を違反にして作り直す。"""
+    p = proj[0]
+    proc = subprocess.Popen(["bash", "ルミナス/tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p.parent,
+                            env=env_for(proj, "halt_eraser", {"FAKE_ERASER_N": "40"}),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        _wait_launch(proj)
+        time.sleep(0.3)
+        r = _halt_cmd(proj, "on", "親から起動")
+        out, err = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert r.returncode == 0 and "送りません" in r.stdout and "送りました" not in r.stdout, (r.stdout, r.stderr)
+    assert proc.returncode == 3 and "Codex が消した疑い" in err, (out, err)
+    assert _halt_path(proj).exists() and "Codex が消した疑い" in _halt_path(proj).read_text(encoding="utf-8")
+    assert (p / "data" / ".codex_violation").exists()
+    assert not (p / "data" / "codex_runs" / ".lock").exists()
+
+
+def test_luminous_halt_off_refused_while_codex_running(proj):
+    p = proj[0]
+    proc = subprocess.Popen(["bash", "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p, env=env_for(proj, "sleep"),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        _wait_launch(proj)
+        _make_halt(proj)
+        rc, out, err = run_tty(["bash", "tools/luminous_halt.sh", "off"], p, env_for(proj, "x"), "解除\n")
+        assert rc == 2 and "実行中" in err and _halt_path(proj).exists(), (out, err)
+        proc.send_signal(signal.SIGTERM)
+        o, e = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 7, (o, e)
+    rc, out, err = run_tty(["bash", "tools/luminous_halt.sh", "off"], p, env_for(proj, "x"), "解除\n")
+    assert rc == 0 and not _halt_path(proj).exists(), (out, err)  # ラッパーが終われば解除できる
+
+
+def test_opinion_halt_before_is_7(proj):
+    _make_halt(proj)
+    r = opinion(proj, "docs/astra-packets/p.md")
+    assert r.returncode == 7 and calls(proj) == [], (r.stdout, r.stderr)
+    assert not (proj[0] / "data" / "codex_runs" / ".lock").exists()
+
+
+def test_opinion_term_stops_group_and_releases_lock(proj):
+    p = proj[0]
+    proc = subprocess.Popen(["bash", "tools/codex_opinion.sh", "docs/astra-packets/p.md"], cwd=p, env=env_for(proj, "sleep"),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        _wait_launch(proj)
+        time.sleep(0.3)
+        t0 = time.monotonic()
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 130, (out, err)
+    assert time.monotonic() - t0 < 15  # グループごと止めたので sleep 30 を待たない
+    assert not (p / "data" / "codex_runs" / ".lock").exists()
+    assert not (p / "data" / ".codex_violation").exists()
+
+
+def test_luminous_halt_on_status_and_nontty_off(proj):
+    p = proj[0]
+    r = _halt_cmd(proj, "on", "試験の理由")
+    assert r.returncode == 0 and _halt_path(proj).exists(), (r.stdout, r.stderr)
+    assert "試験の理由" in _halt_path(proj).read_text(encoding="utf-8")
+    assert (p / "logs" / "halt.log").read_text(encoding="utf-8").count(" on ") == 1
+    assert _safe_halt_log(proj).read_text(encoding="utf-8").count(" on ") == 1  # Codex が書けない置き場にも同じ記録
+    s = _halt_cmd(proj, "status")
+    assert "全体停止中" in s.stdout and "試験の理由" in s.stdout
+    again = _halt_cmd(proj, "on", "二度目")
+    assert again.returncode == 0 and "既に" in again.stdout and "試験の理由" in _halt_path(proj).read_text(encoding="utf-8")
+    off = _halt_cmd(proj, "off")
+    assert off.returncode == 2 and _halt_path(proj).exists()  # 端末でなければ消さない
+    assert not (p / "state" / "halt.log").exists()
+
+
+def test_luminous_halt_reason_is_treated_as_data(proj):
+    r = _halt_cmd(proj, "on", "a\x1b[31mb\nc" + "長" * 300)
+    assert r.returncode == 0
+    text = _halt_path(proj).read_text(encoding="utf-8")
+    assert "\x1b" not in text and text.count("\n") == 1 and len(text) < 260
+
+
+def test_luminous_halt_on_without_reason(proj):
+    r = _halt_cmd(proj, "on")
+    assert r.returncode == 0 and _halt_path(proj).exists(), (r.stdout, r.stderr)
+    assert "(理由なし)" in _halt_path(proj).read_text(encoding="utf-8")
+    assert "(理由なし)" in _halt_cmd(proj, "status").stdout
+
+
+def test_luminous_halt_reason_strips_c1_and_format_chars(proj):
+    r = _halt_cmd(proj, "on", "a\u0085b\u202ec\u200bd\u2028e\tf")
+    assert r.returncode == 0
+    text = _halt_path(proj).read_text(encoding="utf-8")
+    for ch in "\u0085\u202e\u200b\u2028\t":
+        assert ch not in text
+    assert "abcdef" in text
+
+
+def test_luminous_halt_off_in_tty_requires_confirmation(proj):
+    p = proj[0]
+    _make_halt(proj, "2026-10-10T00:00:00Z 端末の試験\n")
+    env = env_for(proj, "x")
+    rc, out, err = run_tty(["bash", "tools/luminous_halt.sh", "off"], p, env, "いいえ\n")
+    assert rc == 2 and _halt_path(proj).exists() and "中止" in out, (out, err)
+    assert not (p / "state" / "halt.log").exists()
+    rc, out, err = run_tty(["bash", "tools/luminous_halt.sh", "off"], p, env, "解除\n")
+    assert rc == 0 and not _halt_path(proj).exists() and "解除しました" in out, (out, err)
+    rec = " off 2026-10-10T00:00:00Z 端末の試験"  # 印の 1 行目（on の日時と理由）をそのまま記録する
+    assert rec in (p / "state" / "halt.log").read_text(encoding="utf-8")
+    assert rec in (p / "logs" / "halt.log").read_text(encoding="utf-8")
+    assert rec in _safe_halt_log(proj).read_text(encoding="utf-8")
+    assert "全体停止ではありません" in _halt_cmd(proj, "status").stdout
+    assert _halt_cmd(proj, "off").returncode == 0  # 印が無ければ何もしないで 0
+
+
+def test_luminous_halt_reports_when_marker_cannot_be_made(proj):
+    p = proj[0]
+    if (p / "data").exists():
+        shutil.rmtree(p / "data")
+    (p / "data").write_text("not a dir\n", encoding="utf-8")  # data が作れない
+    r = _halt_cmd(proj, "on", "x")
+    assert r.returncode == 1 and "止まっていません" in r.stderr
+
+
+@pytest.mark.parametrize("owner_pid", ["-1", "0", "abc", "SLEEP", "999999999"])
+def test_luminous_halt_does_not_term_bad_owner(proj, owner_pid):
+    p = proj[0]
+    lock = p / "data" / "codex_runs" / ".lock"
+    lock.mkdir(parents=True)
+    sleeper = subprocess.Popen(["sleep", "30"])
+    try:
+        pid = str(sleeper.pid) if owner_pid == "SLEEP" else owner_pid
+        (lock / "owner").write_text(f"{pid} {int(time.time())}\n", encoding="utf-8")
+        r = _halt_cmd(proj, "on", "x")
+        assert r.returncode == 0 and "送りません" in r.stdout and "送りました" not in r.stdout, (r.stdout, r.stderr)
+        time.sleep(0.3)
+        assert sleeper.poll() is None  # 無関係のプロセスは生きている
+    finally:
+        sleeper.kill(); sleeper.wait()
+
+
+def test_luminous_halt_waits_for_owner_then_declines(proj):
+    p = proj[0]
+    (p / "data" / "codex_runs" / ".lock").mkdir(parents=True)  # 持ち主がまだ書かれていないロック
+    t0 = time.monotonic()
+    r = _halt_cmd(proj, "on", "x")
+    assert r.returncode == 0 and "持ち主の記録が無い" in r.stdout and time.monotonic() - t0 >= 0.9
+
+
+def test_luminous_halt_reads_owner_written_late(proj):
+    """ロックはあるが持ち主がまだ書かれていない → 1 秒待って読み直す。その PID がラッパーでなければ送らない。"""
+    p = proj[0]
+    lock = p / "data" / "codex_runs" / ".lock"
+    lock.mkdir(parents=True)
+    sleeper = subprocess.Popen(["sleep", "30"])
+    try:
+        import threading
+        threading.Timer(0.4, lambda: (lock / "owner").write_text(f"{sleeper.pid} {int(time.time())}\n", encoding="utf-8")).start()
+        r = _halt_cmd(proj, "on", "x")
+        assert r.returncode == 0 and "ラッパー（bash）ではない" in r.stdout and "送りました" not in r.stdout, (r.stdout, r.stderr)
+        assert "持ち主の記録が無い" not in r.stdout  # 遅れて書かれた持ち主を読めた
+        time.sleep(0.3)
+        assert sleeper.poll() is None
+    finally:
+        sleeper.kill(); sleeper.wait()
+
+
+def _launcher_code(script):
+    """ラッパーの起動用 python（setsid の後・execv の前に印を見る）の本文を取り出す。両ラッパーで同じ文であること"""
+    line = next(l for l in (ROOT / "tools" / script).read_text(encoding="utf-8").splitlines() if "os.setsid()" in l and "os.execv" in l)
+    return line.split("-c '", 1)[1].split("'", 1)[0]
+
+
+def test_launcher_checks_marker_after_setsid_before_exec(tmp_path):
+    code = _launcher_code("codex_impl.sh")
+    assert code == _launcher_code("codex_opinion.sh")
+    marker = tmp_path / ".luminous_halt"
+    launched = tmp_path / "launched"
+    cmd = [os.path.realpath(ROOT / ".venv" / "bin" / "python"), "-I", "-S", "-c", code, str(marker), "/bin/sh", "-c", f"touch '{launched}'"]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0 and launched.exists(), (r.stdout, r.stderr)  # 印が無ければ起動する
+    launched.unlink()
+    os.symlink("/nonexistent/halt-target", marker)  # 先の無いリンクでも停止中
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    assert r.returncode == 7 and not launched.exists(), (r.stdout, r.stderr)  # 印があれば exec せずに 7
+
+
+def test_scope_check_halt_marker_create_ok_delete_violation(tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sc", ROOT / "tools" / "scope_check.py")
+    sc = importlib.util.module_from_spec(spec); spec.loader.exec_module(sc)
+    (tmp_path / "data").mkdir()
+    f = tmp_path / "data" / ".luminous_halt"
+    f.write_text("2026-10-10T00:00:00Z 理由\n", encoding="utf-8")
+    b = f.read_bytes()
+    a = {"t": "file", "m": 0o644, "n": len(b), "h": hashlib.sha256(b).hexdigest()}
+    assert sc.is_system("data/.luminous_halt")
+    assert sc.system_change_problem(str(tmp_path), "data/.luminous_halt", None, a) == ""  # 中身のある新規作成は可
+    assert "削除" in sc.system_change_problem(str(tmp_path), "data/.luminous_halt", a, None)  # 消すのは違反
+

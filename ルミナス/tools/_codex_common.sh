@@ -28,6 +28,7 @@ find_codex() {
 }
 codex_disabled() {
   case "${ORCH_CODEX:-1}" in 0|false|off|no) return 0;; esac
+  if [ -e "$PROJ/data/.luminous_halt" ] || [ -L "$PROJ/data/.luminous_halt" ]; then return 0; fi   # 全体停止（docs/specs/20261008_global_halt.md）
   [ -e "$PROJ/data/.codex_disabled" ]
 }
 # 作業領域の外にある python3（Codex が書き換えられない）。-I -S で実行する

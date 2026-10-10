@@ -48,7 +48,7 @@ APPEND_ONLY = {"data/usage.jsonl", "data/decisions_shadow.jsonl", "state/.sessio
 APPEND_GLOBS = ("logs/*.log",)
 # 印のファイル（ロック・セッションの開始印と編集印・停止スイッチ）。新規作成は「空」（開始印は数字、停止スイッチは中身を問わない）だけ許す。
 # 既存の印の中身の変更は違反（開始印だけは、より新しい時刻への更新を許す。再開・圧縮で書き直されるため）。削除・実行権限も違反
-MARKER_GLOBS = ("data/*.lock", "logs/*.lock", "state/.sessions/*", "data/.*_disabled")
+MARKER_GLOBS = ("data/*.lock", "logs/*.lock", "state/.sessions/*", "data/.*_disabled", "data/.luminous_halt")
 # 費用台帳の数値の欄（追記された行で、数値でない・負・無限大・NaN なら違反。上限の計算を壊させない）
 LEDGER_NUMS = ("usd", "calls", "in_tokens", "out_tokens", "ms")
 
@@ -312,8 +312,8 @@ def _marker_problem(root: str, p: str, b: Optional[dict], a: dict, old_text: Opt
             return f"開始時刻の印が過去に戻された: {p}"
         return ""
     if is_new:
-        if os.path.basename(p).endswith("_disabled"):
-            return ""  # 停止スイッチ（止める方向にしか働かない）。中身は理由のメモでよい
+        if os.path.basename(p).endswith("_disabled") or os.path.basename(p) == ".luminous_halt":
+            return ""  # 停止スイッチ・全体停止の印（止める方向にしか働かない）。中身は理由のメモでよい。消すのは違反（記録ファイルの削除）
         if new.strip():
             return f"新しい印のファイルに中身がある: {p}"
         return ""
