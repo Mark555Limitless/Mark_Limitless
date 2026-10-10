@@ -3,6 +3,27 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-10 深夜 Mac の司令塔が Phase 0 の手順 1〜3・7 を実施（司令塔: Claude Fable 5.1・Mac デスクトップ版）
+- Mark の指示（原文）: 「git pull して」「HANDOVER の先頭の節の手順を実行して」。続けて、クラウドの司令塔が書いた全体停止の実地確認の手順（0〜5）を貼って「以下の作業を実行してください」
+- 状態: GitHub の写しの checkout で `claude/dreamy-euler-k2f60s` を checkout（HEAD `3f00c06`、pull は最新）。Mac の正本フォルダは空で git 管理外だったので、手順どおり写しで動かした。**このセッションは空の正本フォルダで開いたため hooks は未読込**（手順 0 の canary `true luminous-hook-canary` が断られずに実行できた）。実地確認の 3・5（Claude Code 側）は、写しの `ルミナス/` で新しく開いたセッションで行う
+- 手順の結果（版: /bin/bash 3.2.57・git 2.54.0・jq あり・Python は pyenv の 3.12.12、システムの /usr/bin/python3 は 3.9.6。`.venv` は 3.12 で作られた）
+  1. fetch / checkout / pull: 済
+  2. `scripts/setup.sh`: 済（core.hooksPath=ルミナス/.githooks・.venv・npm 依存）。`npm install` が `package-lock.json` を未追跡で生成（保護ファイルなのでコミットしていない。扱いは Mark の判断）
+  3. 試験: **test-hooks 111/112 → 試験側を 1 行直して 112/112**。落ちた 1 件「halt-guard: 読むだけの道具」は hook ではなく試験の bash 3.2 問題（§13 の `"$(hg "{\"tool_name\":…,\"tool_input\":{}}")"` を bash 3.2 がブレース展開し、JSON が 2 つの引数に割れて hook に壊れた入力が渡っていた。JSON を先に変数に入れてから渡す。hook 単体に印ありの Read/Grep/Glob/TaskStop/AskUserQuestion を渡すと 0、Bash/Edit は 2 で正常）。**pytest 187/208・失敗 21 件**（下の分類）
+  4〜6. 未（新しいセッションで）。`luminous_halt.sh status` は「全体停止ではありません」。印の on/off は Mark の端末の手順に残した
+  7. `.claude/settings.local.json` を例から作成（LUMINOUS_OBSIDIAN_DIR＝vault の根・LUMINOUS_TZ・GATE_MODE=always・STOP_GATE=on・**LUMINOUS_PRIVATE_DIR＝鍵の控えの非公開フォルダ**）。端末側（`set_env_key.sh` の控え先・同期の手動実行）には `.zshrc` で同じ export が要る。未設定だと控えは写しの隣の `ルミナス_非公開/`（リポジトリ直下の .gitignore で除外）に置かれる
+  8. 鍵: 未（Mark が端末で）。Codex の実行ファイルは ChatGPT アプリ同梱のものがあり（PATH には無い。`_codex_common.sh` の `find_codex` が見つける）、`~/.codex/config.toml` は gpt-6-astra
+  9. 本節
+- **pytest 失敗 21 件の分類（なぜ・何を・今後）** → 指示書 `docs/specs/20261010_mac_bash32_tests.md`
+  - (a) 18 件 `UnicodeDecodeError`（実体は `tools/codex_impl.sh: line 107: RC\xef: unbound variable`）: bash 3.2 は UTF-8 ロケールで `$RC）` のように変数名の直後に非 ASCII が続くと高位バイトを名前に含める。`set -u` の脚本は落ち、無い脚本は値と直後の 1 文字が黙って消える。pytest は Python の C ロケール強制（子へ `LC_CTYPE=C.UTF-8`）で再現、**Mark の端末（ja_JP.UTF-8）でも同じ**。`LC_ALL=C` では出ない。該当 20 か所（tools 14・hooks 5・scripts 1）。直し方は `${VAR}`。今後: 再発防止の試験（bytes で正規表現）を足す
+  - (b) 1 件 `test_halt_wrapper_launched_from_parent_dir…`（7≠3）: Mac では on が `chflags uchg` を付けるので偽 Codex の rm が印を消せず、ラッパーは「全体停止中」で 7。守りは Linux より強く効いている。(a) を直すと halt_eraser の 2 件も同じ理由で落ちる見込み。偽 Codex が nouchg してから消す前提に試験を合わせる
+  - (c) 1 件 `test_scope_check_git_name_is_case_insensitive`: APFS は大文字小文字を区別せず GIT/Git/gIt が同じフォルダになり FileExistsError。親フォルダを別名に
+  - (d) 1 件 `test_luminous_halt_off_refused_while_codex_running`: macOS の pty は子が先に終わると master への write が EIO。EIO だけ許容
+- 直接修正の記録（[役-小]）: `scripts/test-hooks.sh` の 1 行（試験のみ・守りの判定は触っていない）
+- 決定・判断: hooks 未読込のセッションでは実地確認の Claude Code 側（3・5）を行わず、新しいセッションへ渡す。20 か所の修正は Codex の指示書に（hooks・sync-obsidian は保護ファイルなので適用前に Mark の確認）
+- 未解決: ①正本フォルダ（空）と写しの関係（写しを作業場所にするか、正本へ同期するか）。②PW Checker のカナリア走査に登録済みの `.env` の場所は正本側で、写し側の `.env` は未登録（鍵を入れる前に決める。写しは PW Checker の走査範囲の外）。③`package-lock.json` の扱い。④実地確認 0〜5。⑤鍵（手順 8）
+- 次の一手: Mark が写しの `ルミナス/` で新しいセッションを開く → canary → 実地確認 0〜5（結果と `state/halt.log` をコミット）→ `bash tools/codex_impl.sh docs/specs/20261010_mac_bash32_tests.md high` → pytest 全件 → Opus 審査 → コミット → 監査の確定分の反映（クラウド）
+
 ## 2026-10-10 Mac デスクトップ版への切替（司令塔: Claude Fable 5.1 → 次は Mac の司令塔）
 - Mark の指示（原文）: 「クラウドセッション版からMacデスクトップ版に戻してください。それにより改善されるものがないか監査して、改善および修復できるものは即実行してください。」「B を適用してよい」
 - 状態: 全体停止 A・B ともコミット済み（A `76f8458`、B `c454b45`、Mark の決定の記録 `3e40e1c`）。クラウドのこのセッションは、Mac の司令塔が動き始めたら調査・起草・対話の窓口に退く
