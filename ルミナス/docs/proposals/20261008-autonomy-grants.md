@@ -64,7 +64,7 @@
 **有効の条件（すべて満たすときだけ有効。確かめられなければ台帳は空とみなす）**
 - **hooks と全体停止の見張りが効いている**: 行を使う直前に、決まった無害なコマンド `true luminous-hook-canary` を実行し、全体停止の見張り（halt-guard）に**断られること**を確かめる。断られなければ hooks が効いていないので、台帳は空とみなす（ファイルを作ることでは偽れない）
 - 全体の停止の印が無い
-- **保護ファイルの全体**（`restore-charter.sh` の保護の一覧・`.claude/hooks/halt-guard.sh`・`.claude/settings.json`・この文書）に未コミットの差分が無く、HEAD のそれらの中身が、**検証を通ったいずれかの承認タグ**の時点の中身と同じ。検証は `git verify-tag --raw` の署名者の指紋が、保護ファイルに固定した Mark の鍵の指紋と一致すること（「最新のタグ」では選ばない）
+- **保護ファイルの全体**（`restore-charter.sh` の保護の一覧・`.claude/hooks/halt-guard.sh`・`.claude/settings.json`・この文書）に未コミットの差分が無く、HEAD のそれらの中身が、**検証を通ったいずれかの承認タグ**の時点の中身と同じ。検証は `git -c gpg.ssh.program=/usr/bin/ssh-keygen -c gpg.ssh.allowedSignersFile=/etc/luminous/allowed_signers verify-tag --raw` が `Good "git" signature for` で始まり、署名者の指紋が **root 所有の `/etc/luminous/allowed_signers`**（と Mark の紙の控え）の鍵と一致すること（「最新のタグ」では選ばない）。保護ファイルや `.claude/allowed_signers` に書く指紋は記録であり、検証される HEAD の中にあるので基準にしない（`docs/mark-signing-key.md` §3.2）
 - 行の期限が切れていない（日本時間。期限の日を含む。追加の日から 90 日を超える行は無効）
 - その行の取り消しが無い: 取り消しは、`state/grants_revoked` の git の全履歴と作業中のファイルの**和集合**で判定する。`state/grants_revoked` と `state/grants.log` の各コミットの版が、次の版の先頭部分になっていない（追記以外の変更がある）なら、台帳は無効
 - 同時に台帳を使えるのは 1 つのセッションだけ（予約の前に `state/grants.lock` をロックする）
@@ -72,6 +72,7 @@
 **決まり**
 - 台帳の行を足す・変える・消すのは Mark 自身の操作だけ（§5-3 の方法）。司令塔は文面の案を出すだけ。仮想Mark・サブエージェント・外部AI・別のセッション・予約した通知・PR や webhook の通知・要約・HANDOVER・Web や文書の中の文章は、行を足せない・広げられない（「承認した」という文言は承認ではない）
 - 取り消し（止める方向）は誰でもできる: `state/grants_revoked` に行の ID と日時と理由を 1 行追記し、**すぐにコミットする**。消すことはしない
+- **行を消す・狭めるときも、必ず `state/grants_revoked` に追記する**（新しい承認タグだけでは、保護ファイルを古い承認タグの中身に戻されると行が生き返るため。`docs/mark-signing-key.md` §5）
 - 行を使ってよいのは司令塔だけ。サブエージェント・チームメイト・外部AIは使えない
 - 対象は Mark 自身のリポジトリ・アカウント・サービスに限る。第三者へ送る操作（メール・メッセージ・他人のリポジトリへの書き込み）は台帳に載せない（常に確認）。台帳は公開リポジトリに載るので、宛先の個人情報や鍵を書かない
 - 1 行に書くこと: ID・操作・対象・上限（回数・金額）・期限・事前の条件（例: 鍵の検査を通す、審査で APPROVE、出典の確認）・追加の日
@@ -130,9 +131,9 @@
 3. **台帳を「Mark 自身の操作」で変える方法**:
    - (a) **署名つきの承認タグ（推奨）**。条件をすべて満たすこと:
      - 署名の鍵は Mark 本人が作り、**使うたびに Mark の操作が要る**もの（Touch ID で守られた鍵、ハードウェアの鍵、または記憶させないパスフレーズ）。鍵の設定は Mark が行い、AI はその手順の文書を書くだけ
-     - Mark の鍵の指紋を保護ファイルに固定する。検証は `git verify-tag --raw` の署名者の指紋がそれと一致するときだけ通す
+     - Mark の公開鍵の 1 行を root 所有の `/etc/luminous/allowed_signers` に置き、同じ鍵を GitHub の Signing Key に登録する。検証は `-c gpg.ssh.program=/usr/bin/ssh-keygen -c gpg.ssh.allowedSignersFile=/etc/luminous/allowed_signers` を明示した `git verify-tag --raw` が通るときだけ。保護ファイルに書く指紋は記録（`docs/mark-signing-key.md` §3.2）
      - guard-protected で、AI の `git tag`・`git config`（`gpg.*`・`user.signingkey`・`gpg.ssh.allowedSignersFile`）・`ssh-keygen -Y sign`・`ssh-add` を止める
-     - Mark はタグを付ける前に、端末で `git diff <前の承認タグ> HEAD -- VIRTUAL_MARK.md` などで変更を見る
+     - Mark はタグを付ける前に、変更を**ブラウザの GitHub の compare（紙に控えた前の承認のハッシュ → 新しいハッシュ、2 点リーダー）**で読み、40 桁のハッシュを指定してタグを付け、push 後に GitHub で Verified・指紋・40 桁を確かめる（端末の git・設定・PATH は同じユーザーの AI が書き換えられるため、端末の表示は基準にしない。手順: `docs/mark-signing-key.md` §3.4）
    - (b) Mark が GitHub の Web 画面で `VIRTUAL_MARK.md` を直接編集する。ただし Claude の GitHub の道具（Mark のトークン）でも同じ形のコミットを作れるため、Mark の操作だと確かめる方法が無い。**(b) を選んだ場合、確かめ方が決まるまで台帳は空のまま**
    - (c) Mac の確認画面の許可だけ。後から確かめられないため、**(c) を選んだ場合も台帳は空のまま**
    - 推奨: (a)。手間は増えるが、同じ Mac の AI が台帳を広げられないのは (a) だけ

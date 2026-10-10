@@ -22,3 +22,4 @@
 2026-10-10T11:46:07Z | 全体停止 B（hooks・権限）のコード審査 | claude-fable-5-1 | claude-opus-5-5（Agent・model 明示、A と同じ審査役を継続） | 保護ファイル（hooks・settings.json）の変更。Mark 承認後の適用の確認 | APPROVE（軽1・任意4）→ 反映の再確認で REJECT（中1: 司令塔が旗の判定を狭めた）→ 直して APPROVE。コミット c454b45
 2026-10-10T11:46:07Z | Mac 切替の監査（Workflow） | claude-fable-5-1 | claude-sonnet-5-5（7 観点の洗い出し）→ claude-opus-5-5（批評・反証・整理） | 集める作業は sonnet、判断は opus（CLAUDE.md） | 進行中
 2026-10-10T11:46:07Z | 署名鍵の方式の事実確認と手順書の審査 | claude-fable-5-1 | claude-sonnet-5-5（一次情報の調査）→ claude-opus-5-5（反証審査） | 調査は sonnet で足りる、安全の審査は opus | 調査 完了（1Password の原文は未取得）。審査 進行中
+2026-10-10T12:16:51Z | 署名鍵の手順書の反証審査（8 回） | claude-fable-5-1 | claude-opus-5-5（Agent・model 明示、同じ審査役を継続） | 安全に直結する手順（鍵・承認）。REJECT 7 回で経路を塞いだ | v0.8 で APPROVE。コミット
