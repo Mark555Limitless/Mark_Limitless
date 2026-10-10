@@ -175,7 +175,7 @@ printf '2026-10-10T00:00:00Z 試験の理由\n' > "$HALT"
 [ "$(hg '{"tool_name":"Edit","tool_input":{"file_path":"x"}}')" = 2 ] && ok "halt-guard: 印あり Edit は 2" || ng "halt-guard: 印あり Edit"
 [ "$(hg '{"tool_name":"Agent","tool_input":{}}')" = 2 ] && ok "halt-guard: 印あり Agent（サブエージェント）は 2" || ng "halt-guard: 印あり Agent"
 [ "$(hg '{"tool_name":"WebFetch","tool_input":{}}')" = 2 ] && ok "halt-guard: 印あり WebFetch は 2" || ng "halt-guard: 印あり WebFetch"
-RO=0; for t in Read Grep Glob TaskStop AskUserQuestion; do [ "$(hg "{\"tool_name\":\"$t\",\"tool_input\":{}}")" = 0 ] || RO=1; done
+RO=0; for t in Read Grep Glob TaskStop AskUserQuestion; do J="{\"tool_name\":\"$t\",\"tool_input\":{}}"; [ "$(hg "$J")" = 0 ] || RO=1; done   # JSON は先に変数へ（bash 3.2 は "$( )" の中の {a,b} をブレース展開してしまう）
 [ "$RO" = 0 ] && ok "halt-guard: 印あり Read・Grep・Glob・TaskStop・AskUserQuestion は通る" || ng "halt-guard: 読むだけの道具"
 [ "$(hg 'not json at all')" = 2 ] && ok "halt-guard: 印あり・壊れた JSON でも 2" || ng "halt-guard: 壊れた JSON"
 [ "$(printf '%s' '{"tool_name":"Read"}' | PATH="$T/nopath" /bin/bash "$HG" >/dev/null 2>&1; echo $?)" = 2 ] && ok "halt-guard: 印あり・jq も python3 も無ければ 2（読む道具でも）" || ng "halt-guard: jq/python3 なし"
