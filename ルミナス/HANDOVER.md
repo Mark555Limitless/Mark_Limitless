@@ -3,6 +3,13 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-10 Mark の決定 5 点と、全体停止の実装の開始（司令塔: Claude Fable 5.1）
+- **Mark の決定（原文）**: 「1はい、2はMac、3はあなた(Claude Code)、4はあとで戻します、5は置いてよい」→ 初期用途＝証拠付きメモ／Phase 1 の司令塔は Mac／全体停止の実装は司令塔／ネットワークは後で Custom に戻す／別セッションの記録はリポジトリに置いてよい。記録: `state/decisions/20261010-phase-decisions.md`
+- Codex の返事（第 1 巡）が届いた（`docs/astra-replies/20261010-codex-reply-r1.md`）。Codex が示したコミット `78f0a3486236` と文書の SHA-256 は実物と一致（Codex は公開側の回答を読んでいる）。採用点 1〜5 は司令塔の回答 §3 と一致し、設計は両者で揃った。3 つのハッシュ・主張単位の失効・許可マニフェストへの分離署名・共通ルールは差分表の後に既存文書へ、を採用（`docs/brainstorm/20261010-codex-joint-design-review.md` §8）。残る調整: Codex が Mac 側に作る連携 job 台帳・outbox/inbox/receipt の置き場所と、指示書を先に出せるか（第 2 巡の質問）
+- Phase 0 の文書: 証拠付きメモの型 `docs/evidence-memo.md`（2 軸のラベル・資料の記録の項目・評価問題 v0 の型）
+- 全体停止 A の実装を司令塔が開始（Mark の決定 3。クラウドで実装し、テストと Opus の審査の後にコミット。審査の前にはコミットしない）
+- Mark の問い「claude remote-control はまだ必要か」→ いまは不要。Mac の hooks の確認（Phase 0 の門）は `claude` の起動だけで足りる
+
 ## 2026-10-10 Codex の暫定合意への回答（司令塔: Claude Fable 5.1）
 - Mark が `/model claude-fable-5-1` に切替（PostModelSwitch hook はクラウドで走らないため、escalations.log に手で記録）
 - Codex が「別の Claude Code セッション」と作った暫定合意 10 項目と受入シナリオ 8 件を Mark が貼った（写し: `docs/astra-replies/20261010-codex-joint-design-request.md`）。司令塔が既存の会話と全文書に照らして回答（`docs/brainstorm/20261010-codex-joint-design-review.md`）: 一致 10 点、直すべき点 9 点（ローカル優先と今の実態、責務の実装の順序、取得は今は司令塔が代替、ラベルを 2 軸に、自動改善の 3 段、Jev は既存の狭い方へ、許可台帳の明記、復元は Mac で、許可外ドメインは環境の設定が代替）、最小構成 10 項目、Phase 0〜2 の門、Mark が今決める 5 点、Codex への質問 5 件
