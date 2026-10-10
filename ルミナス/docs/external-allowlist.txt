@@ -28,3 +28,6 @@ requirements.txt
 .claude/settings.json
 .claude/hooks
 .claude/agents
+docs/codex-consultation-brief.md
+docs/brainstorm
+docs/astra-replies/20261008-codex-basic-architecture-v0.2.md

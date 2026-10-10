@@ -3,6 +3,14 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-10 ChatGPT（Codex）とのつなぎ方（司令塔: Claude Opus 5.5）
+- Mark の問い（原文）: 「APIを通じてChatGPTと会話できませんか？Fable5.1 AI NEWS Selectは常時chatGPTのCodexと連携できています。」→ 決定（原文）: 「両方（推奨）」「ただ②優先で、問題があるときは①併用で。」
+- 確認: クラウドから api.openai.com には届く（鍵なしで 401）。chatgpt.com・auth.openai.com はプロキシで 403。Codex はクラウドに無い
+- ② の準備: パケット `docs/astra-packets/20261010-brainstorm-r1.md`（第 1 回の発言）を作り、公開可の一覧（`docs/external-allowlist.txt`）に `docs/codex-consultation-brief.md`・`docs/brainstorm`・Codex 自身の v0.2 の写しを足した。Mark が Mac のルミナスのフォルダで `claude remote-control` を起動したら、そのセッションに `tools/codex_opinion.sh` の実行を頼み、回答を `docs/astra-replies/` に残して push してもらう
+- ① の予備: 指示書 `docs/specs/20261010_openai_api.md`（未実装。公式の料金を記録: gpt-6-astra 入力 $10・出力 $50、gpt-6.1-sol $2・$10、gpt-6-luna $0.10・$0.50、100 万トークンあたり）。鍵は Network secrets に Mark が登録、チャットに貼らない
+- 記録: `state/decisions/20261010-chatgpt-connection.md`
+- 一度、英語で返答してしまった（Mark の指摘で日本語に戻した。応答は日本語の決まり）
+
 ## 2026-10-10 Codex とのブレーンストーミング（第 1 回を用意）（司令塔: Claude Opus 5.5）
 - Mark の依頼（原文）: 「Codex'ルミナスの基本構想を提案'とブレーンストーミングしてください。」
 - クラウドから Codex には直接つながらない（Codex が未導入・ChatGPT への接続はプロキシで 403・ログインは Mark 本人）。Mark が往復を中継する形にし、第 1 回（広げる回）の発言を `docs/brainstorm/20261010-codex-basic-concept.md` に用意した。テーマは 7 つ（最初の仕事・実行制御の形・最安で足りるモデルの学び方・協働の型・記憶・Mark との接点・安全）。各テーマで Codex に「足したい案・一番強い反論・どれから始めるか」を求めた
