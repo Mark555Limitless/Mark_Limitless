@@ -1,5 +1,7 @@
 # 20261010_mac_bash32_tests
 
+> **状態: 実施済み（2026-10-10 深夜、クラウドの司令塔が Mac 切替の監査の実装と合わせて適用。Opus 審査 APPROVE）。Codex に流す必要はない。** (a) の 20 か所（実装中に増えた分を含め 24 か所）は `${VAR}` に置換、再発防止の試験は `tests/test_mac_compat.py` の末尾。(b)(c)(d) は tests 群の実装に含む。Mac の /bin/bash 3.2.57 で `pytest tests -q` が全件通ることの確認だけが残る（Phase 0 の門）。
+
 ## 目的
 Mac（/bin/bash 3.2.57・APFS・macOS の pty）で pytest 21 件が落ちる原因 4 種を直し、Phase 0 の門（Mac で全件通る）を通す。うち 1 種（bash 3.2 の変数展開）は試験だけでなく Mark の端末（UTF-8 ロケール）での実運用でも落ちる本物の不具合。
 

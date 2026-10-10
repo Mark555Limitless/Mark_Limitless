@@ -55,5 +55,11 @@
 - 未反証 91 件（利用枠の上限で失敗）: 対象は主に `restore-charter.sh`・`setup.sh`・`.gitignore`・`scope_check.py`・`HANDOVER.md`・`ROUTINE.md`・`README.md` の指摘。次に別の Workflow で反証を続ける（確定分の実装が終わってから）
 - 実装の結果は §7 に追記する
 
-## 7. 実装の結果
-（実装中。終わり次第、群ごとの変更・試験・審査の結果を書く）
+## 7. 実装の結果（2026-10-10 深夜）
+- 3 群（A: tests／B: tools・orch／C: hooks・scripts・docs）を Opus の実装役が並列で実装（司令塔の代理。Codex はクラウドに無い）。Mac の司令塔が実測した bash 3.2 の不具合（`docs/specs/20261010_mac_bash32_tests.md` (a)〜(d)）もここで実装し、同指示書は実施済み
+- 変更: 29 ファイル＋新規 `tests/test_mac_compat.py`（+686/−155 行）。保護ファイル（`.claude/hooks/` 8 本・`scripts/secret-scan.sh`・`sync-obsidian.sh`・`ROUTINE.md`・`README.md`・`tools/`・`orch/`）は Mark の「即実行」の指示に基づき適用。`settings.json`・CLAUDE.md・CHARTER.md・VIRTUAL_MARK.md は変えていない
+- 試験: pytest 275 件通過・1 件 skip（Mac 専用の uchg の試験）、hooks 191 件通過（元 112 ＋ 新規 79）。bash 3.2・jq 無し・Python 3.9・利用者の git 設定を仕込んだ条件でも通過（審査役の実行）
+- 審査: 2 視点とも 1 回目 REJECT（審査 1: タブ区切りの素通し・初回同期で vault の編集が消える／審査 2: 試験側の pty・署名・除外設定）→ 反映 → 2 回目 APPROVE
+- 守りを少し緩めた点（Mark の確認を求める）: `scope_check.py` の `.DS_Store`（基本名が `.DS_Store`・通常ファイル・実行属性なし・1 MiB 以下・リンク数 1・途中に `.DS_Store` の名前なし のときだけ違反にせず「記録ファイルの変更」として一覧に出す）
+- 見送り（次の機会）: hooks の python3 の起動回数（jq の無い Mac で Bash 1 回あたり 5 回）、`echo $(<.env)` の形の読み取り、行継続の `sed \⏎ -i`、`GIT commit`・`/usr/bin/git commit` の拾い漏れ（本命の pre-commit は効く）、`codex-lock-guard` のパス比較の大文字小文字
+- Mac でだけ確かめること（追加）: `/bin/bash 3.2.57` で `tests/test_mac_compat.py` と `scripts/test-hooks.sh` が通ること（クラウドの bash 3.2.33 では `$RC）` の不具合が再現せず、静的な検出でしか確かめていない）、Finder を開いたままの `codex_impl.sh` で `.DS_Store` が「記録ファイルの変更」になること、BSD の `ps -o etime=` がスリープを含むこと（含まないとロックの誤判定）、CLT の無い Mac で `safe_python` と `trunc` がダイアログを出すか、`~/Applications/ChatGPT.app` に codex があるか、`test-hooks.sh` の BSD `cp -p`・`locale -a` の en_US.UTF-8

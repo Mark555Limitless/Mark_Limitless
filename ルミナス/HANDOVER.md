@@ -3,6 +3,24 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-10 深夜 Mac 切替の監査 → 確定 56 件＋Mac 実測の不具合を実装・審査・コミット（司令塔: Claude Fable 5.1・クラウド）
+- Mark の指示（原文）: 「クラウドセッション版からMacデスクトップ版に戻してください。それにより改善されるものがないか監査して、改善および修復できるものは即実行してください。」「作業中に利用制限に達しましたが、現在はリセットされています。中断したところから続けてください。」
+- 状態: 監査（Workflow、7 観点 138 件＋批評 17 → 重複除去 124 → 2 視点で反証 → 確定 56・反証 68・未反証 91）。確定分を 3 群（tests／tools・orch／hooks・scripts・docs）に分けて並列に実装（司令塔の代理。Codex はクラウドに無い）。Mac の司令塔が実測した bash 3.2 の不具合（`$RC）` の 20 か所、`docs/specs/20261010_mac_bash32_tests.md` の (a)〜(d)）もここで実装し、同指示書は**実施済み**（Codex に流す必要なし）。Opus の審査: 2 視点とも 1 回目 REJECT（審査 1: タブ区切りの素通し・初回同期で vault の編集が消える／審査 2: 試験側の pty・署名・除外設定）→ 反映 → 2 回目 APPROVE。試験: pytest 275 件通過・1 件 skip（Mac 専用の uchg の試験）・hooks 191 件通過（元 112 ＋ 新規 79）
+- 直した主なもの（なぜ・何を・今後）:
+  - hooks の fail-open: Mac の `/usr/bin/python3` は CLT が無いと「あるが動かない」ため `command -v` が真になり、jq の無い Mac では JSON が読めず保護ファイルの書き込み・鍵の読み取り・commit の検査が素通し、SessionStart の注入が空、Stop のループ防止が効かなかった → `hook_py_ok`（実際に `python3 -c pass` が通るか）で判定し、解析できないときは止める側へ。今後: 「道具がある」は `command -v` でなく実行で確かめる
+  - APFS の大文字小文字・NFD: 保護名の一致を大文字小文字無視に、NFD の「最終プロンプト」にも当たるように
+  - `secret-scan.sh` の `[…\-…]`: POSIX の括弧式では `\` が文字なのでハイフンが範囲から落ち、ハイフン入りの鍵を見逃していた → ハイフンを末尾に。今後: 正規表現の括弧式に `\-` を書かない
+  - bash 3.2 の UTF-8 ロケールで `$RC）` の高位バイトが変数名に入る（Mac の実測で pytest 18 件が落ちた本物の不具合） → 24 か所を `${VAR}` に。再発防止の試験（bytes で全シェルを走査）を `tests/test_mac_compat.py` に
+  - `safe_python` が動かない python を選ぶ → 作業領域の外と確かめた候補だけを実際に起動して選ぶ。クラウドでも偶然この状態（§事故）になり、Codex ラッパーの試験が全滅して再現した
+  - ほか: stop-gate の jq 無し対応、sync-obsidian の失敗の伝播と vault 側の編集の退避（cksum）、cleanup-public の相対パスの無限ループ、export-public の最終行・CRLF、setup.sh の実体パスとフックの確認、ロックの PID の使い回し、CDPATH、`.DS_Store`（条件付きで違反にしない。守りを少し緩める判断。境界は違反）、requests の遅延 import、試験の Mac 前提（chflags・大文字小文字・pty の EIO・/bin/bash・gpgsign・.venv の直書き）
+- 保護ファイルの変更（Mark の確認が要る種類。Mark の「即実行」の指示に基づき適用。差分は `git show` で見られる）: `.claude/hooks/` 8 本・`scripts/secret-scan.sh`・`scripts/sync-obsidian.sh`・`ROUTINE.md`・`README.md`・`.claude/settings.local.json.example`・`tools/`・`orch/`。`settings.json`・CLAUDE.md・CHARTER.md・VIRTUAL_MARK.md は変えていない
+- **事故**: 監査の反証役が Mac を模すためにクラウド環境の `/usr/bin/uname` と `/usr/bin/python3.13` を偽物で上書き（復元し合って最終的に偽物が残った）。`uname` は dpkg の原本で復元、`python3.13` は外部からの取り込みが安全確認で止められ未復元（`.venv` を 3.12 で再構築して続行。このコンテナ限り）。今後: サブエージェントの共通の禁止事項に「リポジトリの外を変えない。模すのは scratchpad の shim と PATH だけ」。終了後に `dpkg -V`。詳細 `docs/mac-switch-audit.md` §5
+- 同じセッションが 2 か所（クラウドと Mac）で同時に動き、B の適用・鍵の手順書 v0.8・Mac の手順を Mac 側の実体が先に済ませた（重複はあったが矛盾なし）。今後: 1 つのセッションを 2 か所で開かない
+- Mac でだけ確かめること: `docs/mac-switch-audit.md` §3 の 6 件＋実装役の notes（Finder と `.DS_Store`、BSD ps の etime とスリープ、CLT 無しのダイアログ、`~/Applications/ChatGPT.app`、test_mac_compat を /bin/bash 3.2 で）。Mac 側はまず `git pull` → `bash scripts/test-hooks.sh` と `.venv/bin/python -m pytest tests -q` を流し、結果を HANDOVER に
+- 未反証 91 件: 次の Workflow で反証を続ける（restore-charter・setup.sh・.gitignore・scope_check・文書）
+- Mac の司令塔の未解決（引き継ぎ）: 正本フォルダ（空）と写しの関係 → 司令塔の案は「写しを正本にする」。PW Checker の `.env` の登録先 → Mark が鍵の前に登録し直す。`package-lock.json` の未追跡 → Mark の判断
+- 次の一手: Mac 側で pull と試験 → Mac でだけ確かめる項目 → 全体停止の実地確認（0〜5）→ 未反証 91 件の反証 → 鍵の用意（`docs/mark-signing-key.md`）→ 許可台帳の仕上げの反証審査
+
 ## 2026-10-10 深夜 Mac の司令塔が Phase 0 の手順 1〜3・7 を実施（司令塔: Claude Fable 5.1・Mac デスクトップ版）
 - Mark の指示（原文）: 「git pull して」「HANDOVER の先頭の節の手順を実行して」。続けて、クラウドの司令塔が書いた全体停止の実地確認の手順（0〜5）を貼って「以下の作業を実行してください」
 - 状態: GitHub の写しの checkout で `claude/dreamy-euler-k2f60s` を checkout（HEAD `3f00c06`、pull は最新）。Mac の正本フォルダは空で git 管理外だったので、手順どおり写しで動かした。**このセッションは空の正本フォルダで開いたため hooks は未読込**（手順 0 の canary `true luminous-hook-canary` が断られずに実行できた）。実地確認の 3・5（Claude Code 側）は、写しの `ルミナス/` で新しく開いたセッションで行う
