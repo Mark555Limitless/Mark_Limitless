@@ -7,7 +7,8 @@
 - **Mark の決定（原文）**: 「1はい、2はMac、3はあなた(Claude Code)、4はあとで戻します、5は置いてよい」→ 初期用途＝証拠付きメモ／Phase 1 の司令塔は Mac／全体停止の実装は司令塔／ネットワークは後で Custom に戻す／別セッションの記録はリポジトリに置いてよい。記録: `state/decisions/20261010-phase-decisions.md`
 - Codex の返事（第 1 巡）が届いた（`docs/astra-replies/20261010-codex-reply-r1.md`）。Codex が示したコミット `78f0a3486236` と文書の SHA-256 は実物と一致（Codex は公開側の回答を読んでいる）。採用点 1〜5 は司令塔の回答 §3 と一致し、設計は両者で揃った。3 つのハッシュ・主張単位の失効・許可マニフェストへの分離署名・共通ルールは差分表の後に既存文書へ、を採用（`docs/brainstorm/20261010-codex-joint-design-review.md` §8）。残る調整: Codex が Mac 側に作る連携 job 台帳・outbox/inbox/receipt の置き場所と、指示書を先に出せるか（第 2 巡の質問）
 - Phase 0 の文書: 証拠付きメモの型 `docs/evidence-memo.md`（2 軸のラベル・資料の記録の項目・評価問題 v0 の型）
-- 全体停止 A の実装を司令塔が開始（Mark の決定 3。クラウドで実装し、テストと Opus の審査の後にコミット。審査の前にはコミットしない）
+- 全体停止 A の実装を司令塔が開始（Mark の決定 3。クラウドで実装し、テストと Opus の審査の後にコミット。審査の前にはコミットしない）。実装済み・テスト 197 件（3.13）・97 件（3.9 の判断層ほか）・hooks 62 件が通過。Opus の審査中
+- 全体停止 B（hooks・権限の設定）の差分の案 `docs/proposals/20261010-global-halt-part-b.md` を用意。**Mark が文面を見て承認してから適用**（保護ファイル）。適用後は Mac の新しいセッションで実際に止まることを確かめる
 - Mark の問い「claude remote-control はまだ必要か」→ いまは不要。Mac の hooks の確認（Phase 0 の門）は `claude` の起動だけで足りる
 
 ## 2026-10-10 Codex の暫定合意への回答（司令塔: Claude Fable 5.1）

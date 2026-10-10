@@ -17,3 +17,4 @@
 2026-10-08T14:40:00Z | 許可台帳と全体停止の指示書の反証審査 | claude-opus-5-5 | claude-opus-5-5（Agent・model 明示） | 自走範囲の変更は安全に直結し、Sonnet の審査役も統治の論点は上位の審査が要るとした（VIRTUAL_MARK §4 の「高」） | REJECT（重大4・中15・軽7）。全件反映して v0.2。再審査へ
 2026-10-08T15:05:00Z | 許可台帳と全体停止の反証審査（2 回目） | claude-opus-5-5 | claude-opus-5-5（Agent・model 明示、同じ審査役を継続） | 安全に直結する統治の変更（VIRTUAL_MARK §4 の「高」） | REJECT（重大1・中8・軽9）。全件反映して v0.3。仕上げの審査は Mark の判断の後、適用・実装の前
 2026-10-10T09:40:00Z | 司令塔セッション | claude-opus-5-5 | claude-fable-5-1 | Mark が /model で明示指定（Codex との共同設計の照合。hook がクラウドで走らないため手で記録） | 継続中
+2026-10-10T10:55:00Z | 全体停止 A（tools/orch/tests）のコード審査 | claude-fable-5-1 | claude-opus-5-5（Agent・model 明示） | コード審査は Opus（CLAUDE.md の役割表）。司令塔が実装したので第三者の目が要る | 審査中
