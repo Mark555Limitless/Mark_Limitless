@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 # PreToolUse(Bash) hook: git commit / git push を含むコマンドの前に、作業ツリー＋未追跡ファイル＋HEAD との差分を検査する（憲章 I-4）。
 # PreToolUse は `git add` の前に走るので「ステージ済み差分」だけでは不足。ここは早期警告で、本命は .githooks/pre-commit と pre-push（scripts/setup.sh で有効化）。
-# 検知したら exit 2（ブロック）。jq が無ければ python3 で解析、両方無ければ git 系コマンドのときだけ安全側（exit 2）。
+# 検知したら exit 2（ブロック）。jq が無ければ動く python3 で解析、どちらも使えない（または JSON を読めない）ときは git 系コマンドのときだけ安全側（exit 2）。
 set -u
 ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
+. "$ROOT/.claude/hooks/_lib.sh"   # 関数と変数を定義するだけ（hook_py_ok を解析の前に使う）
 INPUT="$(cat)"
+CMD=""; PARSED=0
 if command -v jq >/dev/null 2>&1; then
-  CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)"
-elif command -v python3 >/dev/null 2>&1; then
-  CMD="$(printf '%s' "$INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("command",""))' 2>/dev/null)"
-else
-  case "$INPUT" in *git*commit*|*git*push*) echo "guard-secrets: jq も python3 も無く検査できないため、git commit/push を止めました。" >&2; exit 2;; esac
+  CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)" && PARSED=1
+elif hook_py_ok; then   # Mac の /usr/bin/python3 は「有るが動かない」ことがある（CLT が無い・壊れている）
+  CMD="$(printf '%s' "$INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("command",""))' 2>/dev/null)" && PARSED=1
+fi
+if [ "$PARSED" = 0 ]; then
+  case "$INPUT" in *git*commit*|*git*push*) echo "guard-secrets: jq も動く python3 も無い（または入力を読めない）ため検査できず、git commit/push を止めました。" >&2; exit 2;; esac
   exit 0
 fi
 [ -z "$CMD" ] && exit 0
@@ -21,7 +24,6 @@ printf '%s' "$NORM" | grep -qE '(^|[;&| ])git( -[A-Za-z-]+( [^ ]+)?)* (commit|pu
 SCAN="$ROOT/scripts/secret-scan.sh"
 [ -x "$SCAN" ] || { echo "guard-secrets: $SCAN が無いため検査できません。" >&2; exit 2; }
 # 入れ子の .git があると、この検査の git も commit 自体もその設定（fsmonitor 等）でコマンドを走らせる。git を使う前に止める
-. "$ROOT/.claude/hooks/_lib.sh"
 NESTED="$(hook_nested_git)"
 if [ -n "$NESTED" ]; then
   echo "ブロック: 作業フォルダ内に .git があります（${NESTED#"$ROOT"/}）。Codex が作った可能性があるので、git を使わずに確かめて外へ移してから commit / push してください。" >&2

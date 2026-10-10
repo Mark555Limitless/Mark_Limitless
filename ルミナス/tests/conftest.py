@@ -10,9 +10,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 SECRET_VARS = ("GEMINI_API_KEY", "TYPESAFE_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY")
+# orch と tools/ が読む環境変数（Mark が .zshrc 等で export していても、試験には持ち込まない）。
+# 足すときは test_health.py の test_flag_vars_cover_env_read_by_orch_and_tools が漏れを知らせる
 FLAG_VARS = ("ORCH_GEMINI", "ORCH_JEV", "ORCH_CODEX", "JEV_ENABLED", "DECISION_BACKEND", "CYCLE_START_EPOCH",
              "ORCH_GEMINI_DAILY_USD_CAP", "ORCH_JEV_DAILY_MAX", "ORCH_JEV_MONTHLY_USD", "DECISION_SHADOW_LOG",
-             "CODEX_BIN", "CODEX_MODEL", "CODEX_FALLBACK_MODEL", "FABLE5_HEADLESS", "JEV_MODEL")
+             "CODEX_BIN", "CODEX_MODEL", "CODEX_FALLBACK_MODEL", "FABLE5_HEADLESS", "JEV_MODEL",
+             "CODEX_OLD_BIN", "ORCH_GEMINI_MODEL", "ORCH_GEMINI_PRICE_IN", "ORCH_GEMINI_PRICE_OUT",
+             "ORCH_GEMINI_THINKING", "JEV_ENDPOINT", "DECISION_TIMEOUT_MS", "CYCLE_LIMIT_S",
+             "CODEX_DISABLE_FEATURES", "LUMINOUS_SAFE_DIR", "LUMINOUS_PRIVATE_DIR", "LUMINOUS_SETTLE_S")
 
 
 @pytest.fixture(autouse=True)

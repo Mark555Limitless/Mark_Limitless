@@ -5,6 +5,7 @@
 set -u
 ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 . "$ROOT/.claude/hooks/_lib.sh"
+hook_py_ok || true   # python3 が動くかを親のシェルで 1 回だけ確かめる（パイプの中の hook_trunc などに結果を引き継ぐ）
 INPUT="$(cat 2>/dev/null || true)"
 SID="$(hook_session_id "$INPUT")"
 mkdir -p "$ROOT/state/.sessions" && date +%s > "$ROOT/state/.sessions/$SID.start"
@@ -15,7 +16,16 @@ if [ -e "$ROOT/data/.luminous_halt" ] || [ -L "$ROOT/data/.luminous_halt" ]; the
 fi
 
 emit() {
-echo "=== ルミナス憲章の復元（SessionStart hook / session $SID） ==="
+echo "=== ルミナス憲章の復元（SessionStart hook / session ${SID}） ==="
+# git を使う前に、入れ子の .git が無いことを git を使わずに確かめる（.git の設定に仕込まれたコマンドを走らせないため）
+NESTED="$(hook_nested_git)"
+# 本命の鍵の検査（.githooks の pre-commit / pre-push）が効いているかを最初に見る。core.hooksPath は .git/config にあって clone に引き継がれないので、
+# 新しい clone（Mac に移したときなど）で scripts/setup.sh を実行していないと、黙って効かない
+if [ -z "$NESTED" ] && ! hook_codex_unsettled && hook_git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  HP="$(cd "$ROOT" && hook_git rev-parse --git-path hooks 2>/dev/null)"
+  (cd "$ROOT" && [ -n "$HP" ] && [ -x "$HP/pre-commit" ] && [ -x "$HP/pre-push" ] && grep -q 'secret-scan' "$HP/pre-commit" 2>/dev/null) \
+    || echo "!!! git フック（pre-commit / pre-push の鍵の検査）が効いていません（core.hooksPath が未設定か別の場所）。Mark が端末で bash scripts/setup.sh を実行すること。"
+fi
 if [ -f "$ROOT/CHARTER.md" ]; then
   awk '/^## 1\./ {p=1} /^## 3\./ {p=0} /^## 4\./ {p=1} /^## 5\./ {p=0} p && !/^$/ {print}' "$ROOT/CHARTER.md" | sed -E 's/\*\*//g; s/^- (I-[0-9]+) /\1 /'
 else
@@ -24,8 +34,6 @@ fi
 
 # 保護ファイル（憲章・権限・hooks）に未コミットの差分があれば最初に警告する（自己改変の検知）
 PROTECTED="CHARTER.md VIRTUAL_MARK.md ROUTINE.md CLAUDE.md AGENTS.md .env.example prompts/ルミナス_最終プロンプト.md .claude .codex .githooks .mcp.json scripts/secret-scan.sh scripts/sync-obsidian.sh scripts/build-final-prompt-docx.mjs package.json package-lock.json"
-# git を使う前に、入れ子の .git が無いことを git を使わずに確かめる（.git の設定に仕込まれたコマンドを走らせないため）
-NESTED="$(hook_nested_git)"
 HEALTH_SKIP=""
 if [ -n "$NESTED" ]; then
   echo
@@ -63,7 +71,7 @@ if [ -z "$NESTED" ] && ! hook_codex_unsettled && hook_git -C "$ROOT" rev-parse -
   if [ -n "$TAG" ]; then
     hook_git -C "$ROOT" verify-tag "$TAG" >/dev/null 2>&1 || echo "!!! 承認タグ $TAG の署名を検証できません（未署名か鍵が無い）。Mark に確認すること。"
     CHG="$(hook_git -C "$ROOT" diff --stat "$TAG" HEAD -- $PROTECTED 2>/dev/null | tail -n 1)"
-    [ -n "$CHG" ] && echo "!!! 承認タグ $TAG 以降に保護ファイルがコミットで変更されています（$CHG）。Mark の承認を確認すること。"
+    [ -n "$CHG" ] && echo "!!! 承認タグ $TAG 以降に保護ファイルがコミットで変更されています（${CHG}）。Mark の承認を確認すること。"
   else
     echo "（承認タグ luminous-approved-* はまだありません。憲章が Mark に承認されたら Mark が付ける）"
   fi
@@ -102,12 +110,19 @@ echo "--- 最終プロンプト（prompts/ルミナス_最終プロンプト.md�
 if [ -n "$HEALTH_SKIP" ]; then
   echo; echo "=== 外部AIの点検（orch.health）は省略: ${HEALTH_SKIP}（Codex が書いた未審査のコードを実行しないため）==="
 elif [ "${FABLE5_HEADLESS:-0}" != "1" ]; then
-  PYBIN="$ROOT/.venv/bin/python"; [ -x "$PYBIN" ] || PYBIN="$(command -v python3)"
+  # .venv が無ければ動く python3（Mac の /usr/bin/python3 は CLT が無い・壊れていると動かない）
+  PYBIN="$ROOT/.venv/bin/python"; [ -x "$PYBIN" ] || { PYBIN=""; hook_py_ok && PYBIN="$(command -v python3)"; }
   if [ -n "$PYBIN" ] && [ -d "$ROOT/orch" ]; then
     echo; echo "=== 外部AIの点検（orch.health）==="
-    TO="$(command -v timeout || command -v gtimeout || true)"   # Mac に timeout が無ければ直接実行する
-    if [ -n "$TO" ]; then (cd "$ROOT" && "$TO" 15 "$PYBIN" -m orch.health --quiet 2>/dev/null | head -5) || true
-    else (cd "$ROOT" && "$PYBIN" -m orch.health --quiet 2>/dev/null | head -5) || true; fi
+    TO="$(command -v timeout || command -v gtimeout || true)"   # Mac に timeout が無ければ perl の alarm（exec の後も残る）、それも無ければ直接実行する
+    # 結果が空なら黙らずに理由の候補と直し方を 1 行出す（.venv が無い python3 で依存を読めない・壊れた .venv・止まった など。stderr は注入しない）
+    if [ -n "$TO" ]; then HL="$(cd "$ROOT" && "$TO" 15 "$PYBIN" -m orch.health --quiet 2>/dev/null | head -5)"
+    elif command -v perl >/dev/null 2>&1; then HL="$(cd "$ROOT" && perl -e 'alarm shift; exec @ARGV or exit 127' 15 "$PYBIN" -m orch.health --quiet 2>/dev/null | head -5)"
+    else HL="$(cd "$ROOT" && "$PYBIN" -m orch.health --quiet 2>/dev/null | head -5)"; fi
+    if [ -n "$HL" ]; then printf '%s\n' "$HL"
+    else echo "（点検の結果が出ませんでした: .venv が無いか壊れていて依存を読めない、または 15 秒で終わらない。Mark が端末で bash scripts/setup.sh を実行する）"; fi
+  elif [ -d "$ROOT/orch" ]; then
+    echo; echo "=== 外部AIの点検（orch.health）は実行できません: .venv も動く python3 もありません。Mark が端末で bash scripts/setup.sh を実行する（Mac は先に xcode-select --install）==="
   fi
 fi
 if [ -f "$ROOT/state/.session-end.log" ] && tail -n 6 "$ROOT/state/.session-end.log" | grep -q '失敗'; then
@@ -118,10 +133,12 @@ TZ_="${LUMINOUS_TZ:-Asia/Tokyo}"
 echo "終了前に書くもの（Stop hook が未更新なら終了を止める）: digest/$(TZ="$TZ_" date +%Y-%m-%d).md、HANDOVER.md の先頭に新しい節、obsidian/ルミナス.md の「最新」節。ROUTINE §3 参照。"
 echo "手順: 憲章 → HANDOVER.md → 直近の判断の自己点検（1分）→ 探索予算とモデルを宣言 → 「復元完了」を 1 行で報告 → 未解決事項から再開。"
 }
-# Claude Code の注入上限（10,000 字）に収める。超える分は切り、切ったことを明示する
-if command -v python3 >/dev/null 2>&1; then
-  emit | PYTHONIOENCODING=utf-8 python3 -c 'import sys; t=sys.stdin.buffer.read().decode("utf-8","replace"); L=8500; print(t if len(t)<=L else t[:L]+"\n…（上限のため以下省略。全文は CHARTER.md / HANDOVER.md / digest を読むこと）")'
-else
-  emit | head -c 8500
+# Claude Code の注入上限（10,000 字）に収める。超える分は切り、切ったことを明示する。
+# 先に全体を受けてから切る（python3 が有っても動かない・途中で落ちると、注入が丸ごと消えたり二重になったりするため）。
+# 動く python3 が無いときは切らずに出す（注入を捨てない。head -c は日本語の文字の途中で切るので使わない）
+OUT_="$(emit)"; CUT_=""
+if hook_py_ok; then
+  CUT_="$(printf '%s\n' "$OUT_" | PYTHONIOENCODING=utf-8 python3 -c 'import sys; t=sys.stdin.buffer.read().decode("utf-8","replace"); L=8500; print(t if len(t)<=L else t[:L]+"\n…（上限のため以下省略。全文は CHARTER.md / HANDOVER.md / digest を読むこと）")' 2>/dev/null)" || CUT_=""
 fi
+if [ -n "$CUT_" ]; then printf '%s\n' "$CUT_"; else printf '%s\n' "$OUT_"; fi
 exit 0

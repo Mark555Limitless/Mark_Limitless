@@ -12,9 +12,16 @@ from __future__ import annotations
 
 import json
 import time
+import warnings
 from typing import Any, Dict, Optional, Tuple
 
-import requests
+# requests が無い python3（.venv が未作成・壊れている）でも、点検と判断層の既定値の経路は動かす（orch/gemini.py と同じ）。
+# 呼ぶ直前に None なら JevUnavailable（判断層は次の手段へ落ちる）。試験は jev.requests を差し替えるので、モジュールの属性として持つ
+warnings.filterwarnings("ignore", message=r"urllib3 v2 only supports OpenSSL 1\.1\.1\+")  # 理由は orch/gemini.py
+try:
+    import requests
+except ImportError:
+    requests = None  # type: ignore[assignment]
 
 from . import config, usage
 
@@ -105,6 +112,8 @@ def call(state: str, questions: Dict[str, Dict[str, Any]], *, timeout_s: float =
     ok, why = limits_ok()
     if not ok:
         raise JevUnavailable(why)
+    if requests is None:
+        raise JevUnavailable("requests 未導入")
     model = config.env("JEV_MODEL", "jev-latest") or "jev-latest"
     body = {"state": state, "model": model, "questions": questions}
     t = max(float(timeout_s), 0.1)
@@ -143,5 +152,6 @@ def status_line() -> str:
     key = "あり" if config.env("TYPESAFE_API_KEY") else "なし"
     on = "有効" if config.env("JEV_ENABLED", "0") == "1" else "無効"
     stop = "全体停止中" if config.global_halt() else ("停止中" if config.disabled("jev") else "稼働")
+    missing = "（requests 未導入: bash scripts/setup.sh）" if requests is None else ""
     return (f"jev: 鍵={key} {on} {stop} 本日 {usage.today_calls('jev')}/{config.env_int('ORCH_JEV_DAILY_MAX', 60)}回 "
-            f"今月 ${usage.month_usd('jev'):.4f}／上限 ${config.env_float('ORCH_JEV_MONTHLY_USD', 1.0):.2f}")
+            f"今月 ${usage.month_usd('jev'):.4f}／上限 ${config.env_float('ORCH_JEV_MONTHLY_USD', 1.0):.2f}{missing}")

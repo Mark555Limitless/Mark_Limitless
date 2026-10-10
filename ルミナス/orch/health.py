@@ -13,11 +13,13 @@ from typing import List, Optional
 from . import config, gemini, jev, usage
 
 CODEX_APP_PATH = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"
+CODEX_USER_APP_PATH = os.path.join("~", "Applications", "ChatGPT.app", "Contents", "Resources", "codex-cli", "bin", "codex")
 
 
 def codex_bin() -> Optional[str]:
-    """新しい場所 → 古い場所（CODEX_OLD_BIN）→ PATH の順に探す。CODEX_BIN があれば最優先。"""
-    for cand in (config.env("CODEX_BIN"), CODEX_APP_PATH, config.env("CODEX_OLD_BIN")):
+    """新しい場所（/Applications、次に ~/Applications）→ 古い場所（CODEX_OLD_BIN）→ PATH の順に探す。CODEX_BIN があれば最優先。
+    tools/_codex_common.sh の find_codex と同じ順。"""
+    for cand in (config.env("CODEX_BIN"), CODEX_APP_PATH, os.path.expanduser(CODEX_USER_APP_PATH), config.env("CODEX_OLD_BIN")):
         if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
             return cand
     return shutil.which("codex")
@@ -36,6 +38,8 @@ def lines(net: bool = True) -> List[str]:
     if config.global_halt():   # 例外は出さず、表示だけ（docs/specs/20261008_global_halt.md）
         out.append("!!! 全体停止中（data/.luminous_halt）。外部AI・Codex・判断層は動きません。解除は Mark が端末で: bash tools/luminous_halt.sh off")
     out.append(codex_line())
+    if gemini.requests is None or jev.requests is None:   # .venv が無いか壊れている（点検の行が黙って消えないように）
+        out.append("!!! requests 未導入: Gemini・Jev は呼べません（判断層は Claude CLI → 既定値）。bash scripts/setup.sh で .venv を作る")
     out.append(gemini.check_status(net=net, net_timeout=5)[1])
     out.append(jev.status_line())
     return out

@@ -8,7 +8,9 @@ git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "export
 # push 済みの上流があればそれを、無ければ HEAD を使う（未 push の変更は外へ出さない）
 if REF="$(git -C "$ROOT" rev-parse --verify -q '@{u}' 2>/dev/null)"; then SRC="上流（push 済み）"; else REF="HEAD"; SRC="HEAD（上流なし）"; fi
 OUT="$(mktemp -d "${TMPDIR:-/tmp}/luminous-public.XXXXXX")"
-while IFS= read -r p; do
+CR="$(printf '\r')"
+while IFS= read -r p || [ -n "$p" ]; do   # 最終行に改行が無くても読む
+  p="${p%"$CR"}"                           # CRLF の許可リストでも末尾の \r をパスに残さない
   case "$p" in ''|\#*) continue;; esac
   # 上流に無いパスがあっても止まらないよう 1 件ずつ書き出す
   git -C "$ROOT" archive "$REF" -- "$p" 2>/dev/null | tar -x -C "$OUT" 2>/dev/null || true

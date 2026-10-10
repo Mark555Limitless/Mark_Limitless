@@ -40,17 +40,22 @@ main() {
   [ -n "$SPEC" ] && [ -f "$SPEC" ] && [ ! -L "$SPEC" ] || { echo "codex_impl: 指示書がありません（リンクは不可）: ${SPEC:-（未指定）}" >&2; return 2; }
   local SPEC_NAME="${SPEC##*/}"; SPEC_NAME="${SPEC_NAME%.md}"
   local CODEX SAFE_PY
-  SAFE_PY="$(safe_python)" || { echo "codex_impl: 作業フォルダの外に python3 がありません" >&2; return 2; }
+  SAFE_PY="$(safe_python)" || { echo "codex_impl: 作業フォルダの外に、動く python3 がありません（Mac では xcode-select --install か Homebrew の python3）" >&2; return 2; }
   # git を実行する前に、作業フォルダ内に .git が無いことを確かめる（.git の設定に仕込まれたコマンドを走らせないため）
-  "$SAFE_PY" -I -S "$PROJ/tools/scope_check.py" nested-git "$PROJ" \
-    || { echo "codex_impl: 作業フォルダ内に .git があります。git コマンドを使わずに中身を確かめ、作業フォルダの外へ移してから実行してください" >&2; return 2; }
+  # scope_check.py は .git を見つけたときだけ 3 を返す。それ以外の失敗は「点検できなかった」として止める
+  local NG=0; "$SAFE_PY" -I -S "$PROJ/tools/scope_check.py" nested-git "$PROJ" || NG=$?
+  case "$NG" in
+    0) ;;
+    3) echo "codex_impl: 作業フォルダ内に .git があります。git コマンドを使わずに中身を確かめ、作業フォルダの外へ移してから実行してください" >&2; return 2;;
+    *) echo "codex_impl: .git の点検を実行できませんでした（終了 $NG: ${SAFE_PY}）。python3 が動くか確かめてください（Mac では xcode-select --install）" >&2; return 2;;
+  esac
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "codex_impl: git リポジトリではありません（git init が必要）" >&2; return 2; }
   LUM_GITDIR="$(git rev-parse --absolute-git-dir)"; LUM_TOPLEVEL="$(git rev-parse --show-toplevel)"
   if [ -n "$(sgit status --porcelain --untracked-files=no -- "$PROJ")" ]; then
     echo "codex_impl: 追跡中のファイルに未コミットの変更があります。司令塔が仕上げてから実行してください" >&2
     sgit status --short --untracked-files=no -- "$PROJ" >&2; return 2
   fi
-  CODEX="$(find_codex)"; [ -n "$CODEX" ] || { echo "codex_impl: Codex 本体が見つかりません（ChatGPT アプリのログイン状態を確認）" >&2; return 2; }
+  CODEX="$(find_codex)"; [ -n "$CODEX" ] || { echo "codex_impl: Codex 本体が見つかりません（ChatGPT アプリが入っているか確認）" >&2; codex_where; return 2; }
   acquire_lock || { echo "codex_impl: 実行できません（data/codex_runs/.lock）" >&2; return 2; }
   trap on_exit EXIT
   trap on_signal INT TERM HUP
@@ -104,7 +109,7 @@ main() {
   # 失敗かつ作業フォルダが無変更のときだけ、別のモデルで1回やり直す（上限・中断のときはやり直さない）
   if [ "$RC" != 0 ] && [ "$LIMIT" = 0 ] && [ "$LUM_INTERRUPTED" = 0 ] && [ "$LUM_HALTED" = 0 ] && [ -n "$CODEX_FALLBACK_MODEL" ] && [ "$CODEX_FALLBACK_MODEL" != "$MODEL" ] \
      && [ "$("${SC[@]}" count "$PROJ" "$LUM_SAFE/before.json" "${RG[@]}")" = 0 ]; then
-    echo "codex_impl: 失敗（rc=$RC）・無変更のため ${CODEX_FALLBACK_MODEL} で1回だけやり直します" >&2
+    echo "codex_impl: 失敗（rc=${RC}）・無変更のため ${CODEX_FALLBACK_MODEL} で1回だけやり直します" >&2
     MODEL="$CODEX_FALLBACK_MODEL"; run_codex "$MODEL" 2; RC=$?
     [ "$RC" != 0 ] && [ "$LUM_INTERRUPTED" = 0 ] && is_limit 2 && LIMIT=1
   fi
@@ -158,7 +163,7 @@ main() {
   elif [ "$RC" != 0 ]; then STATUS=error; CODE=5
   fi
   if [ "$CODE" = 3 ]; then
-    { echo "日時: $STAMP"; echo "記録: ${RUNDIR#"$PROJ"/}"; [ -d "$QDIR" ] && echo "隔離した .git: $QDIR（作業フォルダの外。git コマンドで開かない）"
+    { echo "日時: $STAMP"; echo "記録: ${RUNDIR#"$PROJ"/}"; [ -d "$QDIR" ] && echo "隔離した .git: ${QDIR}（作業フォルダの外。git コマンドで開かない）"
       echo "確認して片付けたら、このファイルを削除する（それまで codex_impl.sh は実行を断る）"; } > data/.codex_violation
   fi
   local PURPOSE="$SPEC_NAME"; [ "$LUM_LAUNCHED" = 0 ] && PURPOSE="$SPEC_NAME:未起動"   # 起動の前に止まったときは、呼んでいないと分かるように
@@ -170,7 +175,7 @@ main() {
     7) echo "codex_impl: 全体停止中のため止めました（data/.luminous_halt）。途中の差分を確認してください（記録: ${RUNDIR#"$PROJ"/}）" >&2 ;;
     130) echo "codex_impl: 中断しました。途中の差分を確認してください（記録: ${RUNDIR#"$PROJ"/}）" >&2 ;;
     4) echo "codex_impl: 利用枠の上限に当たりました。指示書を残して待ってください。途中の差分があれば再実行せず、司令塔が仕上げます" >&2 ;;
-    5) echo "codex_impl: Codex が失敗しました（rc=$RC）。${RUNDIR#"$PROJ"/}/stderr.*.log を確認" >&2 ;;
+    5) echo "codex_impl: Codex が失敗しました（rc=${RC}）。${RUNDIR#"$PROJ"/}/stderr.*.log を確認" >&2 ;;
   esac
   return "$CODE"
 }

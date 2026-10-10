@@ -33,11 +33,15 @@ main() {
   bash scripts/secret-scan.sh --quiet < "$REAL" || { echo "codex_opinion: パケットに鍵らしき文字列があるため中止" >&2; return 6; }
   grep -qE '/Users/|_非公開' "$REAL" && { echo "codex_opinion: パケットに非公開の印（ローカルパス・非公開フォルダ名）があるため中止" >&2; return 6; }
   local CODEX SAFE_PY
-  CODEX="$(find_codex)"; [ -n "$CODEX" ] || { echo "codex_opinion: Codex 本体が見つかりません" >&2; return 2; }
-  SAFE_PY="$(safe_python)" || { echo "codex_opinion: 作業フォルダの外に python3 がありません" >&2; return 2; }
-  # 公開用の書き出し（git archive）の前に、作業フォルダ内に .git が無いことを確かめる（codex_impl.sh と同じ）
-  "$SAFE_PY" -I -S "$PROJ/tools/scope_check.py" nested-git "$PROJ" \
-    || { echo "codex_opinion: 作業フォルダ内に .git があります。git コマンドを使わずに確かめ、外へ移してから実行してください" >&2; return 2; }
+  CODEX="$(find_codex)"; [ -n "$CODEX" ] || { echo "codex_opinion: Codex 本体が見つかりません（ChatGPT アプリが入っているか確認）" >&2; codex_where; return 2; }
+  SAFE_PY="$(safe_python)" || { echo "codex_opinion: 作業フォルダの外に、動く python3 がありません（Mac では xcode-select --install か Homebrew の python3）" >&2; return 2; }
+  # 公開用の書き出し（git archive）の前に、作業フォルダ内に .git が無いことを確かめる（codex_impl.sh と同じ。3 だけが「.git がある」）
+  local NG=0; "$SAFE_PY" -I -S "$PROJ/tools/scope_check.py" nested-git "$PROJ" || NG=$?
+  case "$NG" in
+    0) ;;
+    3) echo "codex_opinion: 作業フォルダ内に .git があります。git コマンドを使わずに確かめ、外へ移してから実行してください" >&2; return 2;;
+    *) echo "codex_opinion: .git の点検を実行できませんでした（終了 $NG: ${SAFE_PY}）。python3 が動くか確かめてください（Mac では xcode-select --install）" >&2; return 2;;
+  esac
   [ -e data/.codex_violation ] && { echo "codex_opinion: 前回の Codex 実行の違反が未処理です（data/.codex_violation）" >&2; return 2; }
   acquire_lock || { echo "codex_opinion: 別の Codex が実行中です" >&2; return 2; }
   trap on_exit EXIT
@@ -80,7 +84,7 @@ main() {
   case "$CODE" in
     0) rm -f "$ERR"; echo "codex_opinion: 保存 → $OUT" ;;
     4) echo "codex_opinion: 利用枠の上限。待ってください" >&2 ;;
-    5) echo "codex_opinion: 失敗（rc=$RC）。$ERR を確認" >&2 ;;
+    5) echo "codex_opinion: 失敗（rc=${RC}）。$ERR を確認" >&2 ;;
     7) echo "codex_opinion: 全体停止中のため止めました（data/.luminous_halt）。$OUT は途中です" >&2 ;;
     130) echo "codex_opinion: 中断しました。$OUT は途中です" >&2 ;;
   esac

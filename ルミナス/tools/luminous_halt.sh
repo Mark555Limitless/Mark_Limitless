@@ -9,19 +9,27 @@
 # （実行中の Codex が印を消しても、ラッパーが後者と突き合わせて違反にできる）。
 # 終了コード: 0=成功 / 1=印を作れない・消せない（止まっていない） / 2=使い方・端末でない・中止 / 3=TERM の後に印が消されていたので作り直した（要確認）
 set -u
+unset CDPATH   # 端末で export された CDPATH で、cd が別の場所へ行く・パスを標準出力に出す（PROJ が 2 行になる）のを防ぐ
 PROJ="$(cd "$(dirname "$0")/.." && pwd)"
 PROJ_REAL="$(cd "$PROJ" && pwd -P)"
+# 根を求められなければ、別の場所に印を作って「止めた」と言わないよう、止まっていないとして失敗する
+[ -n "$PROJ_REAL" ] && [ -f "$PROJ_REAL/tools/luminous_halt.sh" ] || { echo "luminous_halt: ルミナスのフォルダを求められませんでした。止まっていません" >&2; exit 1; }
 HALT="$PROJ/data/.luminous_halt"
 SAFE_BASE="${LUMINOUS_SAFE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/luminous-codex}"
 TERM_PID=""
 
 halted() { [ -e "$HALT" ] || [ -L "$HALT" ]; }
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
-# 理由は「データ」として扱う: 表示できる文字だけを残し、1 行・N 文字で切る（python3 が無ければ C0 制御文字を落としてバイト単位で近似）
+# 理由は「データ」として扱う: 表示できる文字だけを残し、1 行・N 文字で切る（python3 が無いか、あっても動かない
+# ——Mac のコマンドラインツールが無いときの /usr/bin/python3 のスタブなど——ときは、C0 制御文字を落としてバイト単位で近似）
+# -I は PYTHON* の環境変数をすべて無視するので、出力の文字コードは -X utf8 で決める（ロケールに依らず UTF-8）
 trunc() {  # $1=文字数。標準入力 → 標準出力
-  if command -v python3 >/dev/null 2>&1; then
-    PYTHONIOENCODING=utf-8 python3 -I -S -c 'import sys; n=int(sys.argv[1]); s=sys.stdin.buffer.read().decode("utf-8","replace"); print("".join(c for c in s if c.isprintable())[:n])' "$1"
-  else tr -d '\000-\037\177' | head -c $(( $1 * 3 )); echo; fi
+  local buf out
+  buf="$(tr -d '\000')"   # NUL は先に落とす（コマンド置換が警告を出すため）
+  if command -v python3 >/dev/null 2>&1 \
+     && out="$(printf '%s' "$buf" | python3 -I -S -X utf8 -c 'import sys; n=int(sys.argv[1]); s=sys.stdin.buffer.read().decode("utf-8","replace"); print("".join(c for c in s if c.isprintable())[:n])' "$1" 2>/dev/null)"; then
+    printf '%s\n' "$out"
+  else printf '%s' "$buf" | tr -d '\000-\037\177' | head -c $(( $1 * 3 )); echo; fi
 }
 sanitize() { printf '%s' "${*:-}" | tr '\n' ' ' | trunc 200; }
 log_line() {  # $1=on|off $2=理由
@@ -55,10 +63,10 @@ term_codex() {
   if [ ! -s "$owner" ]; then echo "luminous_halt: Codex のロックに持ち主の記録が無いため TERM は送りません（ラッパーが起動の前に印を見て止まります）"; return 0; fi
   read -r pid ts < "$owner" || true
   case "${pid:-}" in ''|*[!0-9]*) echo "luminous_halt: ロックの持ち主の PID が数字でないため TERM は送りません"; return 0;; esac
-  [ "$pid" -ge 2 ] 2>/dev/null || { echo "luminous_halt: ロックの持ち主の PID（$pid）が不正なため TERM は送りません"; return 0; }
-  wrapper_alive "$pid" || { echo "luminous_halt: ロックの持ち主（PID $pid）は動いていないため TERM は送りません"; return 0; }
+  [ "$pid" -ge 2 ] 2>/dev/null || { echo "luminous_halt: ロックの持ち主の PID（${pid}）が不正なため TERM は送りません"; return 0; }
+  wrapper_alive "$pid" || { echo "luminous_halt: ロックの持ち主（PID ${pid}）は動いていないため TERM は送りません"; return 0; }
   args="$(ps -o command= -p "$pid" 2>/dev/null)"; [ -n "$args" ] || args="$(ps -o args= -p "$pid" 2>/dev/null)"
-  [ -n "$args" ] || { echo "luminous_halt: ロックの持ち主（PID $pid）は動いていないため TERM は送りません"; return 0; }
+  [ -n "$args" ] || { echo "luminous_halt: ロックの持ち主（PID ${pid}）は動いていないため TERM は送りません"; return 0; }
   set -f; set -- $args; set +f   # 空白で分ける（グロブ展開はしない）。パスに空白があれば一致せず、送らない側に倒れる
   a0="${1:-}"; a1="${2:-}"
   case "${a0##*/}" in bash) ;; *) echo "luminous_halt: PID $pid はルミナスのラッパー（bash）ではないため TERM は送りません"; return 0;; esac
@@ -77,9 +85,9 @@ term_codex() {
   fi
   if kill -TERM "$pid" 2>/dev/null; then
     TERM_PID="$pid"
-    echo "luminous_halt: 実行中の Codex のラッパー（PID $pid）に TERM を送りました（ラッパーが Codex を止めて記録します）"
+    echo "luminous_halt: 実行中の Codex のラッパー（PID ${pid}）に TERM を送りました（ラッパーが Codex を止めて記録します）"
   else
-    echo "luminous_halt: ラッパー（PID $pid）に TERM を送れませんでした（権限か、直前に終了）"
+    echo "luminous_halt: ラッパー（PID ${pid}）に TERM を送れませんでした（権限か、直前に終了）"
   fi
   return 0
 }
@@ -88,14 +96,14 @@ after_term() {
   local i=0
   [ -n "$TERM_PID" ] || return 0
   while [ "$i" -lt 600 ] && wrapper_alive "$TERM_PID"; do sleep 0.1; i=$(( i + 1 )); done
-  wrapper_alive "$TERM_PID" && echo "luminous_halt: ラッパー（PID $TERM_PID）が 60 秒たっても終わりません。印はそのままです" >&2
+  wrapper_alive "$TERM_PID" && echo "luminous_halt: ラッパー（PID ${TERM_PID}）が 60 秒たっても終わりません。印はそのままです" >&2
   if halted; then
     case "$(head -n 1 "$HALT" 2>/dev/null)" in *"Codex が消した疑い"*)   # ラッパーが先に作り直していた: 消されたことを Mark の端末にも出す
       echo "luminous_halt: !!! 実行中の Codex が印を消した疑いがあり、ラッパーが作り直しました（違反として記録済み）。data/codex_runs/ の記録と差分を確かめてください" >&2; return 3;; esac
     return 0
   fi
   ( set -C; printf '%s %s\n' "$(now_utc)" "再作成（TERM の後に印が消えていた）" > "$HALT" ) 2>/dev/null
-  halted || { echo "luminous_halt: !!! TERM の後に印が消えていて、作り直せませんでした。止まっていません（$HALT）" >&2; return 1; }
+  halted || { echo "luminous_halt: !!! TERM の後に印が消えていて、作り直せませんでした。止まっていません（${HALT}）" >&2; return 1; }
   [ "$(uname -s)" = Darwin ] && chflags uchg "$HALT" 2>/dev/null
   log_line on "再作成（TERM の後に印が消えていた）"
   echo "luminous_halt: !!! TERM の後に印が消えていました（実行中の Codex が消した疑い）。作り直しました。data/codex_runs/ の記録と差分を確かめてください" >&2
@@ -112,7 +120,7 @@ cmd_on() {
   # set -C（noclobber）で O_EXCL 相当にする: 確認と書き込みの間に symlink を置かれても、別のファイルを上書きしない
   if ! ( set -C; printf '%s %s\n' "$(now_utc)" "$reason" > "$HALT" ) 2>/dev/null; then
     if halted; then echo "luminous_halt: 印は同時に別の経路で作られていました（内容は書き換えません）"
-    else echo "luminous_halt: 印を作れませんでした。止まっていません（$HALT）" >&2; return 1; fi
+    else echo "luminous_halt: 印を作れませんでした。止まっていません（${HALT}）" >&2; return 1; fi
   fi
   [ "$(uname -s)" = Darwin ] && chflags uchg "$HALT" 2>/dev/null
   log_line on "$reason"
@@ -145,7 +153,7 @@ cmd_off() {
   [ "$ans" = "解除" ] || { echo "luminous_halt: 中止しました（印は残っています）"; return 2; }
   [ "$(uname -s)" = Darwin ] && chflags nouchg "$HALT" 2>/dev/null
   rm -f "$HALT" 2>/dev/null
-  halted && { echo "luminous_halt: 印を消せませんでした（$HALT）" >&2; return 1; }
+  halted && { echo "luminous_halt: 印を消せませんでした（${HALT}）" >&2; return 1; }
   log_line off "$reason"
   mkdir -p "$PROJ/state" 2>/dev/null && printf '%s off %s\n' "$(now_utc)" "$reason" >> "$PROJ/state/halt.log" 2>/dev/null
   echo "luminous_halt: 解除しました。state/halt.log に記録したので、コミットしてください"

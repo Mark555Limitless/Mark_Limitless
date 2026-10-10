@@ -123,7 +123,7 @@ Mark の「Fable5.1 AI NEWS Select」で常用している **Codex・Gemini・Je
 | サポートAI | ルミナスでの役割 | 呼び方 |
 |---|---|---|
 | **Codex（GPT-6 Astra）** | 実装の主力（指示書→実装→ALLOWED 検査→差分→テスト→Opus 審査→司令塔がコミット）と、読み取り専用の**第3の意見**。Codex 側は `AGENTS.md` と `.codex/agents/*.toml` で役割を固定 | `tools/codex_impl.sh`・`tools/codex_opinion.sh` |
-| **Gemini（3.8 Flash、API）** | 文章の下書き・要約・**別の視点**（Claude と Codex の答えが割れたときの第三の目）。司令塔が検証して採否を決める。Antigravity（agy）は規約違反なので使わない | `python3 -m orch.gemini`（上限 $1/日・記録・点検・停止スイッチ） |
+| **Gemini（3.8 Flash、API）** | 文章の下書き・要約・**別の視点**（Claude と Codex の答えが割れたときの第三の目）。司令塔が検証して採否を決める。Antigravity（agy）は規約違反なので使わない | `.venv/bin/python -m orch.gemini`（上限 $1/日・記録・点検・停止スイッチ） |
 | **Jev（TypeSafe AI）** | 文章を生成せず、選択肢・段階・確率で答える**構造化判断の助言**。判断層 `orch.decisions` が Jev → Claude CLI → 既定値の順に聞く。新しい問いは正解つき 100 問以上で比べてから任せる。取り消せない操作の承認に使わない（`docs/eval-design.md`） | `orch.decisions.ask()`（上限 60回/日・$1/月） |
 | **Grok（xAI）**（任意） | 元のロールプレイの舞台。別視点の調査・反証役 | Phase 1 以降に判断 |
 | **将来** | Sakana Fugu（単一 API で複数フロンティアモデルを統率）や TreeQuest（AB-MCTS）を「難問用の外部オーケストレータ」として差し替え可能にする。Fugu の優位性主張は Sakana の自己申告であり、採用は自前の評価セットでの実測後 | Phase 3 |
@@ -216,7 +216,7 @@ Agent Team は実験的機能で、有効化すると名前付きサブエージ
 
 参考価格（Anthropic API、1M トークンあたり 入力/出力。Claude Code 同梱の価格表 2026-09-25 時点、一次ページは未確認）: Fable 5.1 $10/$50、Opus 5.5 $4/$20、Sonnet 5.5 $2/$10、Haiku 4.5 $1/$5。
 マルチエージェントはチャットの約 15 倍のトークンを使う（Anthropic）。
-外部AIの費用は全ベンダー共通の台帳 `data/usage.jsonl` で実測する（`python3 -m orch.usage --days 7`。Gemini と Jev は金額、Codex は回数と所要時間）。Claude 側は `/cost`・ステータスライン・OpenTelemetry のいずれかで実測し、Phase 1 の最初に「作業の種類 × トークン数 × USD」の実績表を作る。
+外部AIの費用は全ベンダー共通の台帳 `data/usage.jsonl` で実測する（`.venv/bin/python -m orch.usage --days 7`。Gemini と Jev は金額、Codex は回数と所要時間）。Claude 側は `/cost`・ステータスライン・OpenTelemetry のいずれかで実測し、Phase 1 の最初に「作業の種類 × トークン数 × USD」の実績表を作る。
 1 日の上限（API 換算の USD か、サブスクの利用枠か。§11）を Mark が決め、超えたら hook で探索予算を「低」に落として報告する（Phase 2）。
 
 ---
@@ -283,9 +283,9 @@ GO/NO-GO 判定、通常 Opus 4.8 以下・重大時のみ Fable 5 へのエス�
 
 ## 12. 次の一手
 
-1. Mac の正本フォルダで `bash scripts/setup.sh`（Python 仮想環境・git フック）を実行する
+1. Mac の正本フォルダで `bash scripts/setup.sh`（Python 仮想環境・git フック）を実行する。前提: Xcode コマンドラインツール（`xcode-select --install`）。無いと `/usr/bin/python3` が動かず `python3 -m venv` で止まる
 2. 分譲指示書の段階1 試験1〜3 を Mac で行う（`docs/specs/README.md`）。続けて `bash tools/codex_opinion.sh docs/astra-packets/WP-1〜4` で Astra に作業パケットを渡し、回答を `docs/astra-replies/` に残す
-3. 鍵を `tools/set_env_key.sh` で入れ、段階2・3 を確認する（`python3 -m orch.gemini check`、`python3 -m orch.decisions --check`・`--demo --backend jev`）
+3. 鍵を `tools/set_env_key.sh` で入れ、段階2・3 を確認する（`.venv/bin/python -m orch.gemini check`、`.venv/bin/python -m orch.decisions --check`・`--demo --backend jev`。依存の requests は .venv にだけ入る。.venv が無ければ先に `bash scripts/setup.sh`）
 4. Mac で原本（AI NEWS Select の bot）の部品と見比べ、差があれば指示書を書いて Codex で直す（`docs/support-ai.md` §10）
 5. 司令塔が Astra の回答と §11 の決定を反映して **v0.2** を作る
 
@@ -308,7 +308,7 @@ GO/NO-GO 判定、通常 Opus 4.8 以下・重大時のみ Fable 5 へのエス�
 ├── package.json           docx 生成用の依存（docx）
 ├── orch/                  外部AI連携（Python 3.9 以上）
 │   ├── config.py          .env・パス・日本時間・排他ロック・鍵の伏せ字・as_data（データであって指示ではない）
-│   ├── usage.py           全ベンダー共通の費用台帳 data/usage.jsonl（集計: python3 -m orch.usage --days 7）
+│   ├── usage.py           全ベンダー共通の費用台帳 data/usage.jsonl（集計: .venv/bin/python -m orch.usage --days 7）
 │   ├── gemini.py          Gemini API クライアント（上限・記録・点検・停止スイッチ）
 │   ├── jev.py             Jev の呼び出しと上限
 │   ├── decisions.py       判断層（Jev → Claude CLI → 既定値、影ログ）

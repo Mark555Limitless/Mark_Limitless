@@ -1,5 +1,5 @@
 {
-  "_comment": "ローカル専用設定の例（git 管理外）。鍵・パスワードはここに書かない。クラウドセッションは settings.local.json を読まないので、同じ値を環境の env に設定する。",
+  "_comment": "ローカル専用設定の例（git 管理外）。.claude/settings.local.json に写して値を直す。鍵・パスワードはここに書かない。デスクトップアプリから開いたセッションの hooks には .zshrc の export が届かないことがあるので、LUMINOUS_OBSIDIAN_DIR などはここの env に書く。値は ~ や $HOME を使わず絶対パスで書く。FABLE5_HEADLESS はここに書かない（無人実行のコマンドにだけ付ける）。一覧は ROUTINE.md §5。クラウドセッションは settings.local.json を読まないので、同じ値を環境の env に設定する。",
   "env": {
     "LUMINOUS_OBSIDIAN_DIR": "/絶対パス/Obsidian/Vault",
     "LUMINOUS_TZ": "Asia/Tokyo",

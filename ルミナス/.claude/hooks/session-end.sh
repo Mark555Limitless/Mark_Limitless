@@ -7,7 +7,7 @@ ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 . "$ROOT/.claude/hooks/_lib.sh"
 LOG="$ROOT/state/.session-end.log"
 RUNNING=0; SKIP=""; hook_codex_running && { RUNNING=1; SKIP="Codex 実行中"; }
-{ [ -e "$ROOT/data/.luminous_halt" ] || [ -L "$ROOT/data/.luminous_halt" ]; } && { RUNNING=1; SKIP="${SKIP:+$SKIP・}全体停止中"; }   # 全体停止中も書き換えを見送る（記録への追記だけ）
+{ [ -e "$ROOT/data/.luminous_halt" ] || [ -L "$ROOT/data/.luminous_halt" ]; } && { RUNNING=1; SKIP="${SKIP:+${SKIP}・}全体停止中"; }   # 全体停止中も書き換えを見送る（記録への追記だけ）
 {
   echo "--- $(date -u +%Y-%m-%dT%H:%M:%SZ) SessionEnd"
   bash "$ROOT/scripts/sync-obsidian.sh" 2>&1 || echo "sync-obsidian 失敗"

@@ -15,16 +15,26 @@ import argparse
 import sys
 import threading
 import time
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
-import requests
+# requests が無い python3（.venv が未作成・壊れている）でも、点検（orch.health）と判断層の既定値の経路は動かす。
+# 呼ぶ直前に None なら「requests 未導入」として呼ばずに返す。試験は gemini.requests を差し替えるので、モジュールの属性として持つ
+# Mac の Apple 製 python3（3.9）は LibreSSL と結び付いていて、urllib3 v2 が import のたびに NotOpenSSLWarning を出す。
+# 表示だけの警告（TLS 1.2 で通信でき、証明書の検証も変わらない）なので、この文面だけを伏せる。ほかの警告は伏せない
+warnings.filterwarnings("ignore", message=r"urllib3 v2 only supports OpenSSL 1\.1\.1\+")
+try:
+    import requests
+except ImportError:
+    requests = None  # type: ignore[assignment]
 
 from . import config, usage
 
 BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_MODEL = "gemini-3.8-flash"
 UNKNOWN_USAGE_USD = 0.05  # 使用量が分からない応答・通信例外は控えめにこの額を計上する
+REQUESTS_MISSING = "requests 未導入"  # 呼ばなかった（回数・費用に数えない）
 
 
 @dataclass
@@ -114,7 +124,7 @@ def _log(model: str, res: Result, sec: float, usd: float, purpose: str) -> None:
                 fh.write(config.redact(line) + "\n")
     except OSError:
         pass
-    status = "ok" if res.rc == 0 else ("skip" if res.reason in ("停止中", "上限到達", "鍵なし", "全体停止中") else "error")
+    status = "ok" if res.rc == 0 else ("skip" if res.reason in ("停止中", "上限到達", "鍵なし", "全体停止中", REQUESTS_MISSING) else "error")
     try:
         usage.record("gemini", model=model, purpose=purpose, calls=0 if status == "skip" else 1,
                      in_tokens=tin, out_tokens=tout + think, usd=usd, status=status, ms=int(sec * 1000))
@@ -177,6 +187,8 @@ def generate(
         return finish(Result(2, "鍵なし"))
     if daily_usd() >= daily_cap():
         return finish(Result(2, "上限到達"))
+    if requests is None:
+        return finish(Result(2, REQUESTS_MISSING))
 
     url = f"{BASE}/{m}:generateContent"
     headers = {"x-goog-api-key": key, "Content-Type": "application/json"}
@@ -228,6 +240,8 @@ def check_status(*, net: bool = True, net_timeout: float = 20) -> Tuple[bool, st
     key = config.env("GEMINI_API_KEY")
     if not key:
         return False, f"gemini: 鍵なし model={m} {spend}"
+    if requests is None:
+        return False, f"gemini: {REQUESTS_MISSING}（bash scripts/setup.sh） model={m} {spend}"
     if not net:
         return True, f"gemini: 鍵あり（疎通は未確認） model={m} {spend}"
     try:

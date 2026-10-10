@@ -1,4 +1,6 @@
 """tools/ の Codex ラッパーと鍵の入力スクリプトを、偽の codex と擬似端末で試す（本物の Codex・ネットワークは使わない）。"""
+import errno
+import atexit
 import json
 import os
 import pty
@@ -6,6 +8,8 @@ import shutil
 import signal
 import stat
 import subprocess
+import tempfile
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -14,6 +18,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 MARK = "/Us" + "ers/someone/secret"  # 非公開の印は実行時に組み立てる（本文に置かない）
+# 試験が起動する bash。Mark の Mac の実際の制約は /bin/bash 3.2 なので、PATH の先に Homebrew の bash 5 があっても /bin/bash で試す
+# （Linux の /bin/bash は 5.x）。ラッパーの中の「bash scripts/…」と偽の codex の #!/usr/bin/env bash も、_build の shim で同じ bash にする。
+# LUMINOUS_TEST_BASH で別の bash（クラウドで作った 3.2 など）を指定できる。名前は bash のまま（luminous_halt.sh は ps の先頭の語を見る）
+BASH = os.environ.get("LUMINOUS_TEST_BASH") or "/bin/bash"
+assert os.path.basename(BASH) == "bash", BASH
 
 FAKE_CODEX = r"""#!/usr/bin/env bash
 # 偽の codex: FAKE_MODE で振る舞いを変える。呼ばれた引数を記録する
@@ -21,7 +30,7 @@ echo "$*" >> "$FAKE_LOG"
 out=""; prev=""
 for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
 cat > /dev/null
-G="git -c user.email=t@t -c user.name=t -c core.hooksPath=/dev/null"
+G="git -c user.email=t@t -c user.name=t -c core.hooksPath=/dev/null -c commit.gpgsign=false -c tag.gpgsign=false"
 case "$FAKE_MODE" in
   allowed) echo "VERSION_INFO = (0, 1, 0)" >> orch/__init__.py ;;
   outside) echo "x" >> README.md ;;
@@ -43,8 +52,11 @@ case "$FAKE_MODE" in
   glob) echo "# glob" >> orch/config.py ;;
   pycache) mkdir -p orch/__pycache__ .pytest_cache && echo x > orch/__pycache__/evil.cpython-39.pyc && echo x > .pytest_cache/v ;;
   opinion) echo "意見です" ;;
+  bashver) printf '%s\n' "$BASH_VERSION" > "$FAKE_LOG.bash"; echo "意見です" ;;
   halt_during) mkdir -p data && printf '%s test\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > data/.luminous_halt; exit 1 ;;
-  halt_eraser) trap 'rm -f data/.luminous_halt; exit 1' TERM; i=0; while [ "$i" -lt "${FAKE_ERASER_N:-300}" ]; do rm -f data/.luminous_halt; sleep 0.1; i=$((i+1)); done ;;
+  halt_eraser) os="$(uname -s)"   # Mac では印に uchg が付く（luminous_halt.sh・codex_impl.sh）。それも外してから消す Codex
+               erase() { [ "$os" = Darwin ] && chflags nouchg data/.luminous_halt 2>/dev/null; rm -f data/.luminous_halt; }
+               trap 'erase; exit 1' TERM; i=0; while [ "$i" -lt "${FAKE_ERASER_N:-300}" ]; do erase; sleep 0.1; i=$((i+1)); done ;;
   nestedgit) git init -q . && printf '#!/bin/sh\ntouch "%s"\n' "$FAKE_PWNED" > .git/fsm.sh && chmod +x .git/fsm.sh && git config core.fsmonitor "$PWD/.git/fsm.sh" ;;
   nestedgit_sub) git init -q orch && printf '#!/bin/sh\ntouch "%s"\n' "$FAKE_PWNED" > orch/.git/fsm.sh && chmod +x orch/.git/fsm.sh && git -C orch config core.fsmonitor "$PWD/orch/.git/fsm.sh" ;;
   gitconfig) printf '#!/bin/sh\ntouch "%s"\n' "$FAKE_PWNED" > "$FAKE_PWNED.sh" && chmod +x "$FAKE_PWNED.sh" && git config core.fsmonitor "$FAKE_PWNED.sh" ;;
@@ -83,9 +95,18 @@ exit 0
 SPEC = "# s\n<!-- ALLOWED -->\norch/__init__.py\n<!-- /ALLOWED -->\n"
 
 
+# 試験の git は利用者の設定（~/.gitconfig の署名・fsmonitor・除外など）を読まない。GIT_CONFIG_GLOBAL は git 2.32 以降。
+# 古い git でも署名だけは -c で止める（Mark の設定に commit.gpgsign があると、gpg や鍵の承認を呼んで失敗・待ちになる）
+# 試験の git は利用者の設定を読まない: 全体設定・システム設定に加え、既定の除外ファイル（$XDG_CONFIG_HOME/git/ignore）も空の一時フォルダへ向ける
+_XDG_EMPTY = tempfile.mkdtemp(prefix="luminous-test-xdg-")
+atexit.register(shutil.rmtree, _XDG_EMPTY, True)   # import のたびに作る空フォルダは終了時に消す
+GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "XDG_CONFIG_HOME": _XDG_EMPTY}
+
+
 def git(cwd, *args):
-    return subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "core.hooksPath=/dev/null", *args],
-                          cwd=cwd, capture_output=True, text=True, check=True).stdout
+    return subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "core.hooksPath=/dev/null",
+                           "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", *args],
+                          cwd=cwd, env=dict(os.environ, **GIT_ENV), capture_output=True, text=True, check=True).stdout
 
 
 def _build(tmp_path, parent):
@@ -113,14 +134,24 @@ def _build(tmp_path, parent):
     fake.parent.mkdir()
     fake.write_text(FAKE_CODEX, encoding="utf-8")
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    shim = tmp_path / "shim"  # ラッパーの中の「bash scripts/…」と偽の codex の #!/usr/bin/env bash も BASH で走らせる（env_for で PATH の先頭に置く）
+    shim.mkdir()
+    (shim / "bash").symlink_to(BASH)
     cache = Path.home() / ".cache" / f"luminous-test-{uuid.uuid4().hex[:8]}"  # Codex が書けない場所（/tmp の外）
     return p, fake, tmp_path / "fake.log", cache
+
+
+def _unlock_flags(tmp_path):
+    """Mac では luminous_halt.sh・codex_impl.sh が印に uchg を付ける。外さないと pytest が一時フォルダを消せずに残る"""
+    if shutil.which("chflags"):
+        subprocess.run(["chflags", "-R", "nouchg", str(tmp_path)], check=False, capture_output=True)
 
 
 @pytest.fixture
 def proj(tmp_path):
     t = _build(tmp_path, parent=False)
     yield t
+    _unlock_flags(tmp_path)
     shutil.rmtree(t[3], ignore_errors=True)
 
 
@@ -128,20 +159,22 @@ def proj(tmp_path):
 def proj_parent(tmp_path):
     t = _build(tmp_path, parent=True)
     yield t
+    _unlock_flags(tmp_path)
     shutil.rmtree(t[3], ignore_errors=True)
 
 
 def env_for(proj, mode, extra_env=None):
     p, fake, log, cache = proj
     env = dict(os.environ, CODEX_BIN=str(fake), FAKE_MODE=mode, FAKE_LOG=str(log), FAKE_MARK=MARK, XDG_CACHE_HOME=str(cache),
-               FAKE_PWNED=str(log.parent / "pwned"), FAKE_TARGET=str(log.parent / "target"), LUMINOUS_SETTLE_S="0")
+               FAKE_PWNED=str(log.parent / "pwned"), FAKE_TARGET=str(log.parent / "target"), LUMINOUS_SETTLE_S="0",
+               PATH=f"{log.parent / 'shim'}{os.pathsep}{os.environ.get('PATH', '')}")
     env.pop("CODEX_FALLBACK_MODEL", None)
     env.update(extra_env or {})
     return env
 
 
 def run(proj, mode, *, script="codex_impl.sh", args=("docs/specs/s.md", "low"), extra_env=None, timeout=120):
-    return subprocess.run(["bash", f"tools/{script}", *args], cwd=proj[0], env=env_for(proj, mode, extra_env),
+    return subprocess.run([BASH, f"tools/{script}", *args], cwd=proj[0], env=env_for(proj, mode, extra_env),
                           capture_output=True, text=True, timeout=timeout)
 
 
@@ -375,7 +408,7 @@ def test_violation_marker_blocks_next_run(proj):
 
 def test_sigterm_removes_safe_dir_and_releases_lock(proj):
     p, _, log, cache = proj
-    proc = subprocess.Popen(["bash", "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p, env=env_for(proj, "sleep"),
+    proc = subprocess.Popen([BASH, "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p, env=env_for(proj, "sleep"),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
     deadline = time.time() + 30
     while time.time() < deadline and not (log.exists() and log.read_text().strip()):
@@ -437,9 +470,10 @@ def test_scope_check_git_name_is_case_insensitive(tmp_path):
     import importlib.util
     spec = importlib.util.spec_from_file_location("sc", ROOT / "tools" / "scope_check.py")
     sc = importlib.util.module_from_spec(spec); spec.loader.exec_module(sc)
-    for name in (".GIT", ".Git", ".gIt"):
-        d = tmp_path / name.strip(".")
+    for i, name in enumerate((".GIT", ".Git", ".gIt")):
+        d = tmp_path / f"case{i}"  # 大文字小文字だけが違う名前を親にしない（Mac の APFS では同じフォルダになる）
         (d / name).mkdir(parents=True)
+        (d / ".github").mkdir()  # .git に似ているが別の名前は拾わない
         assert sc.find_git(str(d)) == [name]
         assert sc.snapshot(str(d))["files"][name]["t"] == "git"
 
@@ -463,7 +497,7 @@ def test_append_only_files_are_all_gitignored():
     sc = importlib.util.module_from_spec(spec); spec.loader.exec_module(sc)
     samples = sorted(sc.APPEND_ONLY) + ["logs/gemini.log", "data/usage.lock", "logs/jev.lock", "state/.sessions/x.start", "data/.gemini_disabled"]
     for rel in samples:
-        r = subprocess.run(["git", "check-ignore", "-q", "--no-index", rel], cwd=ROOT)
+        r = subprocess.run(["git", "check-ignore", "-q", "--no-index", rel], cwd=ROOT, env=dict(os.environ, **GIT_ENV))  # 利用者の除外設定で通さない
         assert r.returncode == 0, f"{rel} が .gitignore に入っていない"
 
 
@@ -549,9 +583,13 @@ def run_tty(cmd, cwd, env, text, timeout=60):
     master, slave = pty.openpty()
     proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     os.close(slave)
-    time.sleep(0.3)
-    os.write(master, text.encode())
     try:
+        time.sleep(0.3)
+        try:
+            os.write(master, text.encode())
+        except OSError as e:  # 子が入力を読まずに終わり端末が全部閉じていると、macOS の pty は EIO にする（Linux は通る）。結果は呼び手の assert で見る
+            if e.errno != errno.EIO:
+                raise
         out, err = proc.communicate(timeout=timeout)
     finally:
         os.close(master)
@@ -559,7 +597,7 @@ def run_tty(cmd, cwd, env, text, timeout=60):
 
 
 def test_set_env_key_refuses_non_tty(proj):
-    r = subprocess.run(["bash", "tools/set_env_key.sh", "GEMINI_API_KEY"], cwd=proj[0], input="AIzaFAKE\n", capture_output=True, text=True)
+    r = subprocess.run([BASH, "tools/set_env_key.sh", "GEMINI_API_KEY"], cwd=proj[0], input="AIzaFAKE\n", capture_output=True, text=True)
     assert r.returncode == 2 and "端末から直接" in r.stderr
 
 
@@ -569,8 +607,8 @@ def test_set_env_key_writes_600_and_backs_up(proj, tmp_path):
     (p / ".env").chmod(0o644)
     priv = tmp_path / "priv"
     new = "new" + "value" + "1234567890"
-    env = dict(os.environ, LUMINOUS_PRIVATE_DIR=str(priv), ORCH_GEMINI="0", GEMINI_API_KEY="stale-shell-value")
-    rc, out, err = run_tty(["bash", "tools/set_env_key.sh", "GEMINI_API_KEY"], p, env, new + "\n")
+    env = dict(os.environ, LUMINOUS_PRIVATE_DIR=str(priv), ORCH_GEMINI="0", GEMINI_API_KEY="stale-" + "shell-" + "value")
+    rc, out, err = run_tty([BASH, "tools/set_env_key.sh", "GEMINI_API_KEY"], p, env, new + "\n")
     assert rc == 0, err
     text = (p / ".env").read_text(encoding="utf-8")
     assert f"GEMINI_API_KEY={new}" in text and "GEMINI_API_KEY=old" not in text and "ORCH_GEMINI=1" in text
@@ -587,7 +625,7 @@ def test_set_env_key_stops_if_backup_fails(proj, tmp_path):
     blocker = tmp_path / "priv"
     blocker.write_text("ファイルなので mkdir できない", encoding="utf-8")
     env = dict(os.environ, LUMINOUS_PRIVATE_DIR=str(blocker), ORCH_GEMINI="0")
-    rc, out, err = run_tty(["bash", "tools/set_env_key.sh", "GEMINI_API_KEY"], p, env, "newvalue\n")
+    rc, out, err = run_tty([BASH, "tools/set_env_key.sh", "GEMINI_API_KEY"], p, env, "newvalue\n")
     assert rc == 1 and (p / ".env").read_text(encoding="utf-8") == "GEMINI_API_KEY=old\n"
 
 
@@ -607,7 +645,7 @@ def _make_halt(proj, text="2026-10-10T00:00:00Z 試験\n"):
 
 
 def _halt_cmd(proj, *args, stdin=subprocess.DEVNULL):
-    return subprocess.run(["bash", "tools/luminous_halt.sh", *args], cwd=proj[0], env=env_for(proj, "x"),
+    return subprocess.run([BASH, "tools/luminous_halt.sh", *args], cwd=proj[0], env=env_for(proj, "x"),
                           capture_output=True, text=True, stdin=stdin, timeout=90)
 
 
@@ -659,7 +697,7 @@ def test_halt_created_during_run_is_7_without_retry_or_violation(proj):
 @pytest.mark.parametrize("own_session", [False, True])
 def test_halt_terminated_impl_wrapper_exits_7(proj, tmp_path, own_session):
     p = proj[0]
-    proc = subprocess.Popen(["bash", "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p, env=env_for(proj, "sleep"),
+    proc = subprocess.Popen([BASH, "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p, env=env_for(proj, "sleep"),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=own_session)
     try:
         _wait_launch(proj)
@@ -686,7 +724,7 @@ def test_halt_eraser_codex_deleting_marker_is_violation_and_marker_recreated(pro
     """実行中の Codex が印を消し続ける: ラッパーは安全な置き場の halt.log と突き合わせて違反（3）、
     luminous_halt.sh は印を作り直して 3 を返す。"""
     p = proj[0]
-    proc = subprocess.Popen(["bash", "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p, env=env_for(proj, "halt_eraser"),
+    proc = subprocess.Popen([BASH, "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p, env=env_for(proj, "halt_eraser"),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         _wait_launch(proj)
@@ -711,7 +749,7 @@ def test_halt_eraser_env_mismatch_falls_back_to_recreate_by_halt_script(proj):
     その場合も TERM の後の after_term が印を作り直し、3 で知らせる。"""
     p = proj[0]
     other = Path.home() / ".cache" / f"luminous-test-{uuid.uuid4().hex[:8]}"
-    proc = subprocess.Popen(["bash", "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p,
+    proc = subprocess.Popen([BASH, "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p,
                             env=env_for(proj, "halt_eraser", {"XDG_CACHE_HOME": str(other)}),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
@@ -734,7 +772,7 @@ def test_halt_wrapper_launched_from_parent_dir_detects_erased_marker_without_ter
     """親フォルダから相対パスで起動されたラッパーには TERM を送らない（実パスが一致しない。安全側）。
     それでもラッパーは実行後に安全な置き場の halt.log と突き合わせ、消された印を違反にして作り直す。"""
     p = proj[0]
-    proc = subprocess.Popen(["bash", "ルミナス/tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p.parent,
+    proc = subprocess.Popen([BASH, "ルミナス/tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p.parent,
                             env=env_for(proj, "halt_eraser", {"FAKE_ERASER_N": "40"}),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
@@ -754,12 +792,12 @@ def test_halt_wrapper_launched_from_parent_dir_detects_erased_marker_without_ter
 
 def test_luminous_halt_off_refused_while_codex_running(proj):
     p = proj[0]
-    proc = subprocess.Popen(["bash", "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p, env=env_for(proj, "sleep"),
+    proc = subprocess.Popen([BASH, "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p, env=env_for(proj, "sleep"),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         _wait_launch(proj)
         _make_halt(proj)
-        rc, out, err = run_tty(["bash", "tools/luminous_halt.sh", "off"], p, env_for(proj, "x"), "解除\n")
+        rc, out, err = run_tty([BASH, "tools/luminous_halt.sh", "off"], p, env_for(proj, "x"), "解除\n")
         assert rc == 2 and "実行中" in err and _halt_path(proj).exists(), (out, err)
         proc.send_signal(signal.SIGTERM)
         o, e = proc.communicate(timeout=60)
@@ -767,7 +805,7 @@ def test_luminous_halt_off_refused_while_codex_running(proj):
         if proc.poll() is None:
             proc.kill()
     assert proc.returncode == 7, (o, e)
-    rc, out, err = run_tty(["bash", "tools/luminous_halt.sh", "off"], p, env_for(proj, "x"), "解除\n")
+    rc, out, err = run_tty([BASH, "tools/luminous_halt.sh", "off"], p, env_for(proj, "x"), "解除\n")
     assert rc == 0 and not _halt_path(proj).exists(), (out, err)  # ラッパーが終われば解除できる
 
 
@@ -780,7 +818,7 @@ def test_opinion_halt_before_is_7(proj):
 
 def test_opinion_term_stops_group_and_releases_lock(proj):
     p = proj[0]
-    proc = subprocess.Popen(["bash", "tools/codex_opinion.sh", "docs/astra-packets/p.md"], cwd=p, env=env_for(proj, "sleep"),
+    proc = subprocess.Popen([BASH, "tools/codex_opinion.sh", "docs/astra-packets/p.md"], cwd=p, env=env_for(proj, "sleep"),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         _wait_launch(proj)
@@ -840,10 +878,10 @@ def test_luminous_halt_off_in_tty_requires_confirmation(proj):
     p = proj[0]
     _make_halt(proj, "2026-10-10T00:00:00Z 端末の試験\n")
     env = env_for(proj, "x")
-    rc, out, err = run_tty(["bash", "tools/luminous_halt.sh", "off"], p, env, "いいえ\n")
+    rc, out, err = run_tty([BASH, "tools/luminous_halt.sh", "off"], p, env, "いいえ\n")
     assert rc == 2 and _halt_path(proj).exists() and "中止" in out, (out, err)
     assert not (p / "state" / "halt.log").exists()
-    rc, out, err = run_tty(["bash", "tools/luminous_halt.sh", "off"], p, env, "解除\n")
+    rc, out, err = run_tty([BASH, "tools/luminous_halt.sh", "off"], p, env, "解除\n")
     assert rc == 0 and not _halt_path(proj).exists() and "解除しました" in out, (out, err)
     rec = " off 2026-10-10T00:00:00Z 端末の試験"  # 印の 1 行目（on の日時と理由）をそのまま記録する
     assert rec in (p / "state" / "halt.log").read_text(encoding="utf-8")
@@ -916,7 +954,7 @@ def test_launcher_checks_marker_after_setsid_before_exec(tmp_path):
     assert code == _launcher_code("codex_opinion.sh")
     marker = tmp_path / ".luminous_halt"
     launched = tmp_path / "launched"
-    cmd = [os.path.realpath(ROOT / ".venv" / "bin" / "python"), "-I", "-S", "-c", code, str(marker), "/bin/sh", "-c", f"touch '{launched}'"]
+    cmd = [os.path.realpath(sys.executable), "-I", "-S", "-c", code, str(marker), "/bin/sh", "-c", f"touch '{launched}'"]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     assert r.returncode == 0 and launched.exists(), (r.stdout, r.stderr)  # 印が無ければ起動する
     launched.unlink()
@@ -938,3 +976,68 @@ def test_scope_check_halt_marker_create_ok_delete_violation(tmp_path):
     assert sc.system_change_problem(str(tmp_path), "data/.luminous_halt", None, a) == ""  # 中身のある新規作成は可
     assert "削除" in sc.system_change_problem(str(tmp_path), "data/.luminous_halt", a, None)  # 消すのは違反
 
+
+# ---- Mac への切替の監査で見つかった試験の前提（bash の版・利用者の git 設定・pty・印の uchg）----
+def test_tests_use_fixed_bash_not_path_bash(proj, monkeypatch, tmp_path):
+    """PATH の先に別の bash（Homebrew の 5.x など）があっても、ラッパーも、その中の「bash scripts/…」も、
+    偽の codex の #!/usr/bin/env bash も BASH で走る"""
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    (decoy / "bash").write_text(f"#!/bin/sh\ntouch '{tmp_path / 'decoy_used'}'\nexit 99\n", encoding="utf-8")
+    (decoy / "bash").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{decoy}{os.pathsep}{os.environ.get('PATH', '')}")
+    r = opinion(proj, "docs/astra-packets/p.md", mode="bashver")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert not (tmp_path / "decoy_used").exists()
+    want = subprocess.run([BASH, "-c", 'printf "%s\\n" "$BASH_VERSION"'], capture_output=True, text=True, check=True).stdout
+    assert (tmp_path / "fake.log.bash").read_text() == want
+
+
+def test_tests_git_ignores_signing_in_user_gitconfig(tmp_path, monkeypatch):
+    """利用者の git 設定に署名（commit.gpgsign）があっても、試験の git と偽の codex の commit は署名しない（gpg を呼ばない）"""
+    bad = tmp_path / "gitconfig"
+    bad.write_text("[commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n[gpg]\n\tprogram = /nonexistent/gpg\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(bad))
+    ctl = tmp_path / "ctl"
+    ctl.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=ctl, check=True)
+    r = subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"],
+                       cwd=ctl, capture_output=True, text=True)
+    if r.returncode == 0:
+        pytest.skip("この git は GIT_CONFIG_GLOBAL を読まない（2.32 未満）ため、署名の設定を模せない")
+    t = _build(tmp_path, parent=False)  # git() の init・commit は署名せずに通る（陰性の対照: 上の素の commit は署名で失敗した）
+    try:
+        r = run(t, "commit")
+        assert r.returncode == 3 and "HEAD が動きました" in r.stderr, (r.stdout, r.stderr)  # 偽の codex の commit も通った
+    finally:
+        _unlock_flags(tmp_path)
+        shutil.rmtree(t[3], ignore_errors=True)
+
+
+def test_run_tty_child_exiting_before_read(proj):
+    """子が入力を読む前に終わっても、run_tty は落ちずに終了コードを返す（macOS の pty は書き込みを EIO にしうる）"""
+    rc, out, err = run_tty([BASH, "-c", "exit 2"], proj[0], env_for(proj, "x"), "解除\n")
+    assert rc == 2
+
+
+@pytest.mark.parametrize("code,swallowed", [(errno.EIO, True), (errno.EBADF, False)])
+def test_run_tty_ignores_only_eio_on_write(proj, monkeypatch, code, swallowed):
+    """書き込みの失敗で無視するのは EIO（子が終わり端末が閉じた）だけ。ほかの失敗は試験を落とす"""
+    def write(fd, data):
+        raise OSError(code, os.strerror(code))
+    monkeypatch.setattr(os, "write", write)
+    cmd = [BASH, "-c", "exit 2"]
+    if swallowed:
+        assert run_tty(cmd, proj[0], env_for(proj, "x"), "解除\n")[0] == 2
+    else:
+        with pytest.raises(OSError):
+            run_tty(cmd, proj[0], env_for(proj, "x"), "解除\n")
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="印に uchg を付けるのは Mac だけ")
+def test_halt_marker_is_uchg_on_mac_and_teardown_unlocks(proj, tmp_path):
+    """Mac では on が印に uchg を付ける（偽の codex は外してから消す）。後片付けは uchg を外して一時フォルダを消せるようにする"""
+    assert _halt_cmd(proj, "on", "x").returncode == 0
+    assert os.lstat(_halt_path(proj)).st_flags & stat.UF_IMMUTABLE
+    _unlock_flags(tmp_path)
+    assert not os.lstat(_halt_path(proj)).st_flags & stat.UF_IMMUTABLE

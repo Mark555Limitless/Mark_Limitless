@@ -18,6 +18,8 @@ git を1回も実行しないうちに入れ子の .git を探して隔離する
   scope_check.py ledger   --data-dir D --vendor codex ...     費用台帳に1行足す（orch.usage と同じ形式・同じロック）
 snapshot・count・quarantine-git・compare・recheck は --real-gitdir <GITDIR> を受け取り、本物の .git は比べない。
 .git の判定は大文字小文字を区別しない（Mac の既定のファイルシステムでは .GIT も git が .git として読むため）。
+ALLOWED との比較はパスと ALLOWED の両方を NFC にそろえる（記録する名前は変えない）。
+Mac の Finder の .DS_Store は、条件を満たすときだけ違反にせず「記録ファイルの変更」として一覧に出す（is_finder_meta）。
 """
 from __future__ import annotations
 
@@ -33,6 +35,7 @@ import re
 import shutil
 import stat
 import sys
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -51,6 +54,9 @@ APPEND_GLOBS = ("logs/*.log",)
 MARKER_GLOBS = ("data/*.lock", "logs/*.lock", "state/.sessions/*", "data/.*_disabled", "data/.luminous_halt")
 # 費用台帳の数値の欄（追記された行で、数値でない・負・無限大・NaN なら違反。上限の計算を壊させない）
 LEDGER_NUMS = ("usd", "calls", "in_tokens", "out_tokens", "ms")
+# Mac の Finder が、開いたフォルダに作り・表示を変えると書き換える表示設定のファイル（is_finder_meta）
+FINDER_META = ".DS_Store"
+FINDER_META_MAX = 1 << 20  # 1 MiB
 
 
 # HFS+ が名前の比較で無視する文字（git の is_hfs_dotgit と同じ。ゼロ幅文字・方向制御文字・BOM）
@@ -61,6 +67,30 @@ HFS_IGNORABLE = dict.fromkeys([0x200C, 0x200D, 0x200E, 0x200F, 0x202A, 0x202B, 0
 def is_git_name(name: str) -> bool:
     """git が .git として読みうる名前か（大文字小文字・HFS+ で無視される文字を問わない）。"""
     return name.translate(HFS_IGNORABLE).casefold() == ".git"
+
+
+def is_finder_meta(path: str, ent: Optional[dict]) -> bool:
+    """Finder の .DS_Store として、違反にせず「記録ファイルの変更」として扱ってよいか（ent は実行後の記録）。
+
+    守りを少し緩める判断: Codex の実行中に Mark が Finder でフォルダを開くと、Finder が .DS_Store を作り・書き換える。
+    これを「ALLOWED 外の変更」にすると、偽の違反で無人の実行が止まり、data/.codex_violation を消すまで再開できない。
+    .DS_Store は .gitignore 済みで公開されず（tests で確かめる）、どこからも読まれないので、次の条件をすべて満たすときだけ許す:
+      - 基本名がちょうど .DS_Store で、途中のフォルダに .DS_Store という名前が無い（.DS_Store/ の下のファイルは対象外）
+      - 通常のファイル（リンク・FIFO・ディレクトリは対象外。リンク先を書き換えさせない）
+      - 実行権限が無い・1 MiB 以下（Finder が書くのは 0644 の小さいファイル）
+      - リンク数が 1（ハードリンクにして、作業フォルダの外のファイルを見ない名前を通じて書き換えさせない）
+    削除は対象にしない（Finder は消さない）。条件を外れるものは従来どおり ALLOWED と照らして違反にする。
+    """
+    parts = path.split("/")
+    if parts[-1] != FINDER_META or FINDER_META in parts[:-1]:
+        return False
+    if not isinstance(ent, dict) or ent.get("t") != "file":
+        return False
+    try:
+        mode, size, links = int(ent.get("m", 0o111)), int(ent.get("n", FINDER_META_MAX + 1)), int(ent.get("l", 0))
+    except (TypeError, ValueError):
+        return False
+    return not mode & 0o111 and size <= FINDER_META_MAX and links == 1
 
 
 def _open_regular(path: str):
@@ -164,13 +194,16 @@ def snapshot(root: str, real_gitdir: str = "") -> Dict[str, dict]:
             size = 0
             buf = b""
             with fh:
-                mode = stat.S_IMODE(os.fstat(fh.fileno()).st_mode)
+                fst = os.fstat(fh.fileno())
+                mode = stat.S_IMODE(fst.st_mode)
                 for chunk in iter(lambda: fh.read(1 << 20), b""):
                     h.update(chunk)
                     size += len(chunk)
                     if size <= CONTENT_MAX:
                         buf += chunk
             files[rel] = {"t": "file", "h": h.hexdigest(), "n": size, "m": mode}
+            if f == FINDER_META:
+                files[rel]["l"] = fst.st_nlink  # ハードリンクを見分ける（.DS_Store だけ。is_finder_meta）
             if size <= CONTENT_MAX and b"\0" not in buf and not _no_content(rel):
                 contents[rel] = buf.decode("utf-8", "replace")
     return {"files": files, "contents": contents}
@@ -391,8 +424,16 @@ def parse_allowed(spec_text: str) -> List[str]:
     return out
 
 
+def _nfc(s: str) -> str:
+    return unicodedata.normalize("NFC", s)
+
+
 def is_allowed(path: str, allowed: List[str]) -> bool:
+    """ALLOWED との一致は、パスと ALLOWED の両方を NFC にそろえて比べる（Mac の APFS は名前を保存した形のまま返すので、
+    Finder やコピーで NFD のまま保存された名前でも、NFC で書いた ALLOWED と一致させる）。記録する名前は変えない。"""
+    path = _nfc(path)
     for pat in allowed:
+        pat = _nfc(pat)
         if path == pat or (pat.endswith("/") and path.startswith(pat)) or fnmatch.fnmatchcase(path, pat):
             return True
     return False
@@ -409,8 +450,8 @@ def added_lines(old: str, new: str) -> List[str]:
     return out
 
 
-def compare(root: str, before: dict, allowed: List[str], real_gitdir: str = "") -> Tuple[List[str], List[str]]:
-    """(問題の一覧, 記録ファイル以外の変更の一覧) を返す。"""
+def compare(root: str, before: dict, allowed: List[str], real_gitdir: str = "") -> Tuple[List[str], List[str], dict]:
+    """(問題の一覧, 変更の一覧（記録ファイル・印のファイル・Finder の .DS_Store も含む）, 実行後のスナップショット) を返す。"""
     after = snapshot(root, real_gitdir)
     problems = []
     for p in nested_git(before, after):
@@ -427,6 +468,8 @@ def compare(root: str, before: dict, allowed: List[str], real_gitdir: str = "") 
         if (ent or {}).get("t") == "special":
             problems.append(f"通常のファイルでないもの（FIFO 等）: {p}")
             continue
+        if is_finder_meta(p, ent):
+            continue  # Finder の .DS_Store（条件は is_finder_meta。main が「記録ファイルの変更」として一覧に出す）
         if is_system(p):
             why = system_change_problem(root, p, b_ent, ent, before["contents"].get(p))
             if why:
@@ -469,6 +512,8 @@ def recheck(root: str, after: dict, real_gitdir: str = "") -> List[str]:
         b_ent, ent = after["files"].get(p), now["files"].get(p)
         if ent is None and (b_ent or {}).get("t") == "badartifact":
             continue
+        if is_finder_meta(p, ent):
+            continue  # 検査の後に Finder が書いた .DS_Store（is_finder_meta）
         if is_system(p) and (ent or {}).get("t") != "git":
             why = system_change_problem(root, p, b_ent, ent, after["contents"].get(p))
             if why:
@@ -541,7 +586,8 @@ def main(argv: List[str]) -> int:
             json.dump(snap, fh, ensure_ascii=False)
         return 0
     if a.cmd == "count":
-        print(len(changes(_load(a.before), snapshot(a.root, a.real_gitdir))))
+        now = snapshot(a.root, a.real_gitdir)
+        print(len([p for p in changes(_load(a.before), now) if not is_finder_meta(p, now["files"].get(p))]))
         return 0
     if a.cmd == "quarantine-git":
         moved, failed = quarantine_git(a.root, _load(a.before), a.dest, a.real_gitdir)
@@ -565,14 +611,19 @@ def main(argv: List[str]) -> int:
             for pr in problems[:50]:
                 print(f"  - {pr}", file=sys.stderr)
             return 3
-        user = [p for p in changed if not is_system(p)]
-        system = [p for p in changed if is_system(p)]
+        finder = [p for p in changed if is_finder_meta(p, after["files"].get(p))]
+        user = [p for p in changed if not is_system(p) and p not in finder]
+        system = [p for p in changed if is_system(p) and p not in finder]
         print(f"scope_check: OK（変更 {len(user)} 件、すべて ALLOWED 内）")
         for p in user[:50]:
             print(f"  - {p}")
         if system:
             print(f"scope_check: 記録ファイルの追記・印のファイル {len(system)} 件（検査済み）")
             for p in system[:20]:
+                print(f"  - {p}")
+        if finder:
+            print(f"scope_check: 記録ファイルの変更（Finder の .DS_Store。通常・実行権限なし・1 MiB 以下なので違反にしない）{len(finder)} 件")
+            for p in finder[:20]:
                 print(f"  - {p}")
         return 0
     if a.cmd == "recheck":

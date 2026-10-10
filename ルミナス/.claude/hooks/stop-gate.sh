@@ -8,9 +8,18 @@
 set -u
 ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 . "$ROOT/.claude/hooks/_lib.sh"
+command -v jq >/dev/null 2>&1 || hook_py_ok || true   # jq が無いときは python3 が動くかを親で 1 回だけ確かめる（$( ) の中の解析に引き継ぐ）
 INPUT="$(cat)"
 [ "$(hook_json_get "$INPUT" stop_hook_active)" = "true" ] && exit 0
+# jq も動く python3 も無くてもループ防止を効かせる（文字列の値の中では " が \" に逃がされるので、本文に同じ文字を書かれても一致しない）
+case "$INPUT" in *'"stop_hook_active":true'*|*'"stop_hook_active": true'*) exit 0 ;; esac
 [ "${FABLE5_HEADLESS:-0}" = "1" ] && exit 0
+# 止める JSON を出す（jq → 動く python3 → printf の順。printf では \ と " を逃がし、制御文字は空白にする。どれでも stdout の JSON で止める）
+block_json() {
+  if command -v jq >/dev/null 2>&1 && jq -n --arg r "$1" '{decision:"block", reason:$r}' 2>/dev/null; then return 0; fi
+  if hook_py_ok && printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps({"decision":"block","reason":sys.stdin.buffer.read().decode("utf-8","replace")}))' 2>/dev/null; then return 0; fi
+  printf '{"decision":"block","reason":"%s"}\n' "$(printf '%s' "$1" | tr '\000-\037' ' ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+}
 { [ -e "$ROOT/data/.luminous_halt" ] || [ -L "$ROOT/data/.luminous_halt" ]; } && exit 0   # 全体停止中は終了を止めない（閉じ込めない。docs/specs/20261008_global_halt.md）
 SID="$(hook_session_id "$INPUT")"
 MARK="$ROOT/state/.sessions/$SID.start"
@@ -24,8 +33,7 @@ DIGEST="$ROOT/digest/$TODAY.md"
 
 if [ "${LUMINOUS_STOP_GATE:-on}" = "off" ]; then
   if [ -f "$DIGEST" ] && grep -q 'STOP_GATE=off' "$DIGEST"; then exit 0; fi
-  jq -n --arg d "digest/$TODAY.md" '{decision:"block", reason:("Stop ゲートを解除するには、" + $d + " に「STOP_GATE=off: 理由」を書いてください（ROUTINE §5）。")}' 2>/dev/null \
-    || { echo "Stop ゲート解除には digest に「STOP_GATE=off: 理由」が必要です。" >&2; exit 2; }
+  block_json "Stop ゲートを解除するには、digest/$TODAY.md に「STOP_GATE=off: 理由」を書いてください（ROUTINE §5）。"
   exit 0
 fi
 if [ "${LUMINOUS_GATE_MODE:-always}" = "edits" ] && [ ! -f "$ROOT/state/.sessions/$SID.edited" ]; then exit 0; fi
@@ -40,5 +48,5 @@ check "HANDOVER.md" 5
 check "obsidian/ルミナス.md" 5
 [ -z "$MISSING" ] && exit 0
 REASON="ルミナス ROUTINE §3: 終了前に次を今日の内容で更新してください →$MISSING 。digest には やったこと・判断・数値（実測）・未解決・次の一手、HANDOVER.md には先頭に新しい節（状態・決定・未解決・次の一手）、obsidian/ルミナス.md には「最新」節の 1 行。書き終えたら停止してよい。"
-if command -v jq >/dev/null 2>&1; then jq -n --arg r "$REASON" '{decision:"block", reason:$r}'; else echo "$REASON" >&2; exit 2; fi
+block_json "$REASON"
 exit 0

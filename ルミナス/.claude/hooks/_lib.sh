@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
-# hooks 共通: stdin の JSON から項目を取り出す（jq → python3 の順。どちらも無ければ空）
+# python3 が「有る」だけでなく「動く」かを 1 回だけ確かめて覚える（Mac の /usr/bin/python3 は、CLT が無い・壊れていると exit 1 で終わる代役）。
+# 外から渡された値は信用しない（読み込みのたびに空にする）。パイプや $( ) の中で初めて呼ぶと結果が親に残らないので、多く使う hook は先に親で 1 回呼ぶ
+_HOOK_PY_OK=""
+hook_py_ok() {
+  if [ -z "$_HOOK_PY_OK" ]; then
+    if command -v python3 >/dev/null 2>&1 && python3 -c 'pass' </dev/null >/dev/null 2>&1; then _HOOK_PY_OK=1; else _HOOK_PY_OK=0; fi
+  fi
+  [ "$_HOOK_PY_OK" = 1 ]
+}
+# hooks 共通: stdin の JSON から項目を取り出す（jq → 動く python3 の順。どちらも無ければ空）
 hook_json_get() {  # $1=JSON文字列 $2=キー（トップレベル）
   if command -v jq >/dev/null 2>&1; then printf '%s' "$1" | jq -r --arg k "$2" '.[$k] // empty' 2>/dev/null
-  elif command -v python3 >/dev/null 2>&1; then printf '%s' "$1" | python3 -c 'import json,sys; d=json.load(sys.stdin); v=d.get(sys.argv[1],""); print("" if v is None else (str(v).lower() if isinstance(v,bool) else v))' "$2" 2>/dev/null
+  elif hook_py_ok; then printf '%s' "$1" | python3 -c 'import json,sys; d=json.load(sys.stdin); v=d.get(sys.argv[1],""); print("" if v is None else (str(v).lower() if isinstance(v,bool) else v))' "$2" 2>/dev/null
   fi
 }
 hook_session_id() {  # 無ければ "nosession"
@@ -61,13 +70,13 @@ hook_flush_escalations() {
 }
 # 1 行の「データ」の表示用: 表示できる文字（isprintable）だけを残し N 文字で切る（C1 の制御文字・双方向の上書き U+202E も落とす）。python3 が無ければ C0 だけ落とす近似
 hook_sanitize_line() {
-  if command -v python3 >/dev/null 2>&1; then
+  if hook_py_ok; then
     PYTHONIOENCODING=utf-8 python3 -c 'import sys; n=int(sys.argv[1]); s=sys.stdin.buffer.read().decode("utf-8","replace").replace("\n"," "); print("".join(c for c in s if c.isprintable())[:n])' "$1"
   else tr -d '\000-\037\177' | tr '\n' ' ' | head -c $(( $1 * 3 )); echo; fi
 }
 # 文字単位で各行を N 文字に切る（cut -c は C ロケールでバイト単位になり、日本語を壊すため使わない）
 hook_trunc() {
-  if command -v python3 >/dev/null 2>&1; then
+  if hook_py_ok; then
     PYTHONIOENCODING=utf-8 python3 -c 'import sys
 n=int(sys.argv[1])
 for l in sys.stdin.buffer:
