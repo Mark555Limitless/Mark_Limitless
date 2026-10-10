@@ -122,7 +122,7 @@ main() {
   [ "$HLOG_N1" -gt "$HLOG_N0" ] && HLAST="$(tail -c +$(( HLOG_N0 + 1 )) "$HLOG" 2>/dev/null | grep -E '^[^ ]+ (on|off) ' | tail -n 1 | cut -d' ' -f2)"
   if [ "$HLAST" = on ] && ! halted; then
     echo "codex_impl: 実行中に全体停止の印が付けられた記録があるのに、検査の時点で印が無い（Codex が消した疑い）。印を作り直します" >&2; VIOL=1; LUM_HALTED=1
-    printf '%s 再作成（Codex が消した疑い）\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > data/.luminous_halt 2>/dev/null
+    ( set -C; printf '%s 再作成（Codex が消した疑い）\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > data/.luminous_halt ) 2>/dev/null   # noclobber: symlink を置かれても他を上書きしない
     [ "$(uname -s)" = Darwin ] && chflags uchg data/.luminous_halt 2>/dev/null
     halted || echo "codex_impl: 印を作り直せませんでした。Mark が bash tools/luminous_halt.sh on を実行してください" >&2
   fi

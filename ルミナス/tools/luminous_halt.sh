@@ -89,8 +89,12 @@ after_term() {
   [ -n "$TERM_PID" ] || return 0
   while [ "$i" -lt 600 ] && wrapper_alive "$TERM_PID"; do sleep 0.1; i=$(( i + 1 )); done
   wrapper_alive "$TERM_PID" && echo "luminous_halt: ラッパー（PID $TERM_PID）が 60 秒たっても終わりません。印はそのままです" >&2
-  halted && return 0
-  printf '%s %s\n' "$(now_utc)" "再作成（TERM の後に印が消えていた）" > "$HALT" 2>/dev/null
+  if halted; then
+    case "$(head -n 1 "$HALT" 2>/dev/null)" in *"Codex が消した疑い"*)   # ラッパーが先に作り直していた: 消されたことを Mark の端末にも出す
+      echo "luminous_halt: !!! 実行中の Codex が印を消した疑いがあり、ラッパーが作り直しました（違反として記録済み）。data/codex_runs/ の記録と差分を確かめてください" >&2; return 3;; esac
+    return 0
+  fi
+  ( set -C; printf '%s %s\n' "$(now_utc)" "再作成（TERM の後に印が消えていた）" > "$HALT" ) 2>/dev/null
   halted || { echo "luminous_halt: !!! TERM の後に印が消えていて、作り直せませんでした。止まっていません（$HALT）" >&2; return 1; }
   [ "$(uname -s)" = Darwin ] && chflags uchg "$HALT" 2>/dev/null
   log_line on "再作成（TERM の後に印が消えていた）"
@@ -105,8 +109,10 @@ cmd_on() {
     echo "luminous_halt: 既に全体停止中です（印はそのまま。data/.luminous_halt）"
     log_line on "$reason"; term_codex; after_term; return $?
   fi
-  if ! printf '%s %s\n' "$(now_utc)" "$reason" > "$HALT" 2>/dev/null || ! halted; then
-    echo "luminous_halt: 印を作れませんでした。止まっていません（$HALT）" >&2; return 1
+  # set -C（noclobber）で O_EXCL 相当にする: 確認と書き込みの間に symlink を置かれても、別のファイルを上書きしない
+  if ! ( set -C; printf '%s %s\n' "$(now_utc)" "$reason" > "$HALT" ) 2>/dev/null; then
+    if halted; then echo "luminous_halt: 印は同時に別の経路で作られていました（内容は書き換えません）"
+    else echo "luminous_halt: 印を作れませんでした。止まっていません（$HALT）" >&2; return 1; fi
   fi
   [ "$(uname -s)" = Darwin ] && chflags uchg "$HALT" 2>/dev/null
   log_line on "$reason"

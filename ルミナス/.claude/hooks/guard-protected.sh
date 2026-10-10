@@ -14,10 +14,10 @@ else CMD="$(printf '%s' "$INPUT" | python3 -c 'import json,sys; print(json.load(
 [ -z "$CMD" ] && exit 0
 deny() { echo "ブロック（guard-protected）: $1" >&2; exit 2; }
 
-PROT='(CHARTER\.md|\.env\.example|VIRTUAL_MARK\.md|ROUTINE\.md|CLAUDE\.md|AGENTS\.md|最終プロンプト|\.claude/|\.codex/|\.githooks/|\.mcp\.json|secret-scan\.sh|sync-obsidian\.sh|build-final-prompt-docx\.mjs|package(-lock)?\.json)'
-WRITE='(sed[^|;&]*[[:space:]]-i|perl[^|;&]*[[:space:]]-i|>>?|[[:space:]]tee[[:space:]]|(^|[[:space:];&|(])(mv|cp|rm|truncate|chmod|chown|ln|install|rsync|dd|unlink|patch)[[:space:]]|git[[:space:]]+(checkout|restore|reset|mv|rm|apply|am|stash)[[:space:]]|(python3?|node|ruby|perl|php)[[:space:]]+(-c|-e|-)|write_text|writeFile|open\([^)]*["'"'"'][wa])'
+PROT='(CHARTER\.md|\.env\.example|VIRTUAL_MARK\.md|ROUTINE\.md|CLAUDE\.md|AGENTS\.md|最終プロンプト|\.claude/|\.codex/|\.githooks/|\.mcp\.json|secret-scan\.sh|sync-obsidian\.sh|build-final-prompt-docx\.mjs|package(-lock)?\.json|luminous_halt)'
+WRITE='(sed[^|;&]*[[:space:]]-i|perl[^|;&]*[[:space:]]-i|>>?|[[:space:]]tee[[:space:]]|(^|[[:space:];&|(`])(mv|cp|rm|truncate|chmod|chown|ln|install|rsync|dd|unlink|patch)[[:space:]]|git[[:space:]]+(checkout|restore|reset|mv|rm|apply|am|stash)[[:space:]]|(python3?|node|ruby|perl|php)[[:space:]]+-([^m]|$)|write_text|writeFile|open\([^)]*["'"'"'][wa])'
 SECRET='((^|[^A-Za-z0-9_])\.env(rc)?(\.[A-Za-z0-9_.-]+)?([^A-Za-z0-9_.-]|$)|settings\.local\.json|_非公開|env_backups|\.pem([[:space:]"'"'"']|$)|\.p8([[:space:]"'"'"']|$)|\.p12([[:space:]"'"'"']|$)|id_rsa|id_ed25519|\.netrc|credentials\.json)'
-READ='(^|[[:space:];&|(])(cat|less|more|head|tail|grep|rg|awk|sed|cp|scp|curl|base64|xxd|od|strings|source|python3?|node|jq|bat|nl|diff)[[:space:]]'
+READ='(^|[[:space:];&|(`])(cat|less|more|head|tail|grep|rg|awk|sed|cp|scp|curl|base64|xxd|od|strings|source|python3?|node|jq|bat|nl|diff)[[:space:]]'
 
 # 1) git フックの迂回（--no-verify、core.hooksPath の変更）
 printf '%s' "$CMD" | grep -qE '(^|[[:space:]])--no-verify([[:space:]]|$)|git[[:space:]]+commit[^|;&]*[[:space:]]-[A-Za-z]*n[A-Za-z]*([[:space:]]|$)|core\.hooksPath' \
@@ -28,7 +28,11 @@ CMD_S="$(printf '%s' "$CMD" | sed 's/\.env\.example//g')"
 printf '%s' "$CMD_S" | grep -qE "$SECRET" && printf '%s' "$CMD_S" | grep -qE "$READ" \
   && deny "鍵・資格情報らしきファイルを Bash で読もうとしています（憲章 I-4）。必要なら Mark 本人が扱います。"
 # 3) 保護ファイルへの Bash 経由の書き込み（heredoc 本文の誤検知を避けるため、先頭行と各区切りの後だけを見る）
-HEAD_PART="$(printf '%s' "$CMD" | awk 'NR==1{print; next} /^[[:space:]]*(cd|git|sed|perl|mv|cp|rm|tee|cat|python3?|node|echo|printf|chmod|ln|truncate)[[:space:]]/{print}')"
+# 全体停止の on・status は誰でも打ってよい（印そのものは保護するが、付ける・見る操作は止めない。docs/specs/20261008_global_halt.md）。
+# 1 行だけで、先頭が（cd … && ）bash tools/luminous_halt.sh on|status で、後ろに ; | & がつながっていなければ通す（fd の複製 2>&1 は無視）
+HALT_OK='^[[:space:]]*(cd[[:space:]]+[^;|&<>$`]+&&[[:space:]]*)?(bash[[:space:]]+)?(\./)?tools/luminous_halt\.sh[[:space:]]+(on|status)([[:space:]][^;|&<>$`]*)?$'   # 理由に $( ) ` < > は不可（シェルが実行・リダイレクトするため）
+case "$CMD" in *$'\n'*) ;; *) printf '%s' "$CMD" | sed -E 's/[0-9]*>&[0-9]+//g' | grep -qE "$HALT_OK" && exit 0 ;; esac   # 複数行なら素通しにしない（2 行目に別の命令が書ける）
+HEAD_PART="$(printf '%s' "$CMD" | awk 'NR==1{print; next} /^[[:space:]]*(cd|git|sed|perl|mv|cp|rm|tee|cat|python3?|node|echo|printf|chmod|ln|truncate)[[:space:]]/{print}' | sed -E 's/[0-9]*>&[0-9]+//g')"
 if printf '%s' "$HEAD_PART" | grep -qE "$PROT" && printf '%s' "$HEAD_PART" | grep -qE "$WRITE"; then
   deny "保護ファイル（憲章・権限・hooks・最終プロンプト・hooks が呼ぶ scripts）を Bash で書き換えようとしています。Edit ツールを使い、Mark の確認を通してください（憲章 §4）。"
 fi

@@ -1,7 +1,9 @@
 # 提案: 全体停止 B（hooks・権限の設定）— 差分の案
 
 > `docs/specs/20261008_global_halt.md` の B。保護ファイル（`.claude/`・`ROUTINE.md`・`scripts/test-hooks.sh`）を変えるため、**Mark が差分の文面を見て承認した後に、司令塔が適用する**（CLAUDE.md「変更の進め方」・憲章 §4）。
-> 状態: **案（未適用）**。A（`tools/`・`orch/`・`tests/`）の Opus 審査が APPROVE になってから進める。適用の後、Mac のルミナスのフォルダで新しいセッションを開き、実際に止まることを確かめる（hooks は開始時に読み込まれる）。
+> 状態: **適用済み（2026-10-10）**。Mark がチャットで「B を適用してよい」と承認 → 司令塔が適用 → `scripts/test-hooks.sh` 112 件通過 → Opus 審査 APPROVE（軽 1・任意 4 を反映して再確認も APPROVE）。
+> 提案からの差（審査で妥当と確認）: (1) `settings.json` のコマンドは `exec … || exit 2` ではなく「halt-guard.sh を呼び、0 以外なら 2」（スクリプトが無いとき 127 で素通しにならないため）。(2) deny は既存に合わせ `Edit(/data/.luminous_halt)` と `**/data/.luminous_halt` の両方。(3) canary は先頭が `true luminous-hook-canary` のコマンドだけ断る。(4) 許可の一覧に KillShell・KillBash（古い版の停止の道具名）。(5) guard-protected は `bash tools/luminous_halt.sh on|status`（1 行・`; | & < > $( )` バッククォートなし）を通す。
+> 元の案: A（`tools/`・`orch/`・`tests/`）の Opus 審査が APPROVE になってから進める。適用の後、Mac のルミナスのフォルダで新しいセッションを開き、実際に止まることを確かめる（hooks は開始時に読み込まれる）。
 
 ## 0. 何が変わるか（Mark 向けの要約）
 

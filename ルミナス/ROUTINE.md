@@ -56,15 +56,16 @@
 | イベント | スクリプト | 役割 |
 |---|---|---|
 | SessionStart (startup/resume/clear/compact/fork) | `.claude/hooks/restore-charter.sh` | 憲章 §1-2-4・VIRTUAL_MARK §3・ROUTINE §1・HANDOVER.md の最新の節・最新 digest・Obsidian「最新」・最終プロンプト冒頭を注入（過去の記録は「データ」と明示）。保護ファイルの未承認差分を警告。開始時刻を `state/.sessions/<id>.start` に記録 |
+| PreToolUse（すべての道具 `*`） | `.claude/hooks/halt-guard.sh` | 全体停止の印（`data/.luminous_halt`）があれば、読むだけの道具（Read・Grep・Glob）と TaskStop・AskUserQuestion 以外を止める。印は `bash tools/luminous_halt.sh on 理由` で誰でも付けられ、消すのは Mark が端末で `off`。印が無くても `true luminous-hook-canary` だけは常に断る（hooks が効いているかの確認用）。**終了の関門を外す `LUMINOUS_STOP_GATE=off` とは別物**（あちらは記録の催促を外すだけで、作業は止めない）。仕様: `docs/specs/20261008_global_halt.md` |
 | PreToolUse (Edit/Write) | `.claude/hooks/codex-lock-guard.sh` | Codex の実行中（`data/codex_runs/.lock` の持ち主が生きている）は、このフォルダ内の編集を止める（実行中の編集は範囲検査で違反になる） |
 | PreToolUse (Bash) | `.claude/hooks/guard-protected.sh` | 保護ファイルへの Bash 書き込み、鍵ファイルの Bash 読み取り、`--no-verify`・`core.hooksPath` の変更を止める |
 | PreToolUse (Bash) | `.claude/hooks/guard-secrets.sh` | `git commit` / `git push` を含むコマンドの前に、作業ツリー・ステージ・未追跡ファイルを `scripts/secret-scan.sh` で検査してブロック（早期警告） |
 | git pre-commit / pre-push | `.githooks/pre-commit`, `.githooks/pre-push` | 実際にコミット・送出される差分を検査（本命）。`scripts/setup.sh` で `core.hooksPath` を設定 |
 | PostToolUse (Edit/Write) | `.claude/hooks/mark-edited.sh` | このセッションで編集があったことを記録（`LUMINOUS_GATE_MODE=edits` 用） |
 | PostModelSwitch | `.claude/hooks/log-model-switch.sh` | モデル切替を `state/escalations.log` に機械記入。Codex の実行中は Codex が書けない置き場（`~/.cache/luminous-codex/escalations.pending`）に保留し、次の切替か SessionEnd で機械的な書式の行だけを移す。モデル名は英数字と記号の一部に限る |
-| Stop | `.claude/hooks/stop-gate.sh` | 今日（Asia/Tokyo）の digest・HANDOVER.md・Obsidian ハブが、このセッションの開始後に更新されていなければ終了をブロック。無人実行（`FABLE5_HEADLESS=1`）では止めない |
+| Stop | `.claude/hooks/stop-gate.sh` | 今日（Asia/Tokyo）の digest・HANDOVER.md・Obsidian ハブが、このセッションの開始後に更新されていなければ終了をブロック。無人実行（`FABLE5_HEADLESS=1`）では止めない。全体停止中も止めない（閉じ込めない） |
 | SessionStart（同上の中） | `python3 -m orch.health --quiet` | 外部AI（Codex・Gemini・Jev）の点検を 3 行で表示。無人実行では出さない |
-| SessionEnd | `.claude/hooks/session-end.sh`（timeout 30 秒） | Obsidian 同期・docx 再生成。失敗は `state/.session-end.log` に残し、次回 SessionStart で警告 |
+| SessionEnd | `.claude/hooks/session-end.sh`（timeout 30 秒） | Obsidian 同期・docx 再生成（Codex の実行中と全体停止中は docx 再生成を見送る）。失敗は `state/.session-end.log` に残し、次回 SessionStart で警告 |
 | permissions | `.claude/settings.json` | 保護ファイル（最終プロンプト・hooks が呼ぶ scripts・package*.json・.mcp.json を含む）の編集、`git push`、MCP の書き込み・送信・共有系は ask。`printenv`/`env`、`.env`・`settings.local.json`・鍵ファイルの読取は deny |
 
 - 環境変数: `LUMINOUS_OBSIDIAN_DIR`（vault の絶対パス）、`LUMINOUS_TZ`（既定 Asia/Tokyo）、`LUMINOUS_GATE_MODE`（always｜edits）、`LUMINOUS_STOP_GATE`（on｜off）。Mac では `.claude/settings.local.json` の `env`（例: `.claude/settings.local.json.example`）かシェルで設定。**クラウドセッションは `settings.local.json` を読まない**ので、環境側の環境変数に設定する。鍵はここに書かない

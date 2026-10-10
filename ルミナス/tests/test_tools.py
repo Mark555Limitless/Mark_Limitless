@@ -698,7 +698,7 @@ def test_halt_eraser_codex_deleting_marker_is_violation_and_marker_recreated(pro
             proc.kill()
     assert proc.returncode == 3 and "Codex が消した疑い" in err, (out, err)
     assert _halt_path(proj).exists() and "Codex が消した疑い" in _halt_path(proj).read_text(encoding="utf-8")  # ラッパーが作り直した
-    assert r.returncode == 0 and "TERM を送りました" in r.stdout and "作り直しました" not in r.stderr, (r.stdout, r.stderr)  # 終了を待った時点で印はある
+    assert r.returncode == 3 and "TERM を送りました" in r.stdout and "ラッパーが作り直しました" in r.stderr, (r.stdout, r.stderr)  # 消されたことを端末にも出す
     assert (p / "data" / ".codex_violation").exists()
     assert not (p / "data" / "codex_runs" / ".lock").exists()
     assert (p / "logs" / "halt.log").read_text(encoding="utf-8").count(" on ") == 1

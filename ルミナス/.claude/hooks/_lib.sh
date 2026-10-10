@@ -59,6 +59,12 @@ hook_flush_escalations() {
   [ "$total" -gt "$good" ] 2>/dev/null && echo "保留していたモデル切替の記録のうち、書式に合わない $((total - good)) 行を捨てました（中身は表示しない）"
   return 0
 }
+# 1 行の「データ」の表示用: 表示できる文字（isprintable）だけを残し N 文字で切る（C1 の制御文字・双方向の上書き U+202E も落とす）。python3 が無ければ C0 だけ落とす近似
+hook_sanitize_line() {
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHONIOENCODING=utf-8 python3 -c 'import sys; n=int(sys.argv[1]); s=sys.stdin.buffer.read().decode("utf-8","replace").replace("\n"," "); print("".join(c for c in s if c.isprintable())[:n])' "$1"
+  else tr -d '\000-\037\177' | tr '\n' ' ' | head -c $(( $1 * 3 )); echo; fi
+}
 # 文字単位で各行を N 文字に切る（cut -c は C ロケールでバイト単位になり、日本語を壊すため使わない）
 hook_trunc() {
   if command -v python3 >/dev/null 2>&1; then

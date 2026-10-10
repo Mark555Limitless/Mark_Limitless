@@ -79,6 +79,8 @@ tests/test_jev.py
 
 ## B. 司令塔が行う部分（保護ファイル。Mark の確認つき。A の審査が APPROVE の後。Mac の正本で）
 
+> 適用 2026-10-10（Mark 承認「B を適用してよい」、Opus 審査 APPROVE。差分の記録: `docs/proposals/20261010-global-halt-part-b.md`）。残りは 8（Mac の新しいセッションで実地確認）。
+
 1. `.claude/hooks/halt-guard.sh` を新設し、`PreToolUse` にすべての道具（matcher `*`）で登録する
    - **settings.json のコマンドの中に、印の確認を直接書く**（スクリプトが消えた・壊れた・名前を変えられたときも止まるように）。例: `bash -c 'P="$CLAUDE_PROJECT_DIR"; if [ -e "$P/data/.luminous_halt" ] || [ -L "$P/data/.luminous_halt" ]; then … 読むだけの道具なら通す、ほかは echo 全体停止中 >&2; exit 2; fi; exec bash "$P/.claude/hooks/halt-guard.sh"'`
    - スクリプトの中でも、JSON を読む前にまず印を見る。印があれば、その後のどの失敗（jq が無い・壊れた入力・未定義変数）でも終了 2（止める）にする

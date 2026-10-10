@@ -52,7 +52,11 @@
       "Read(/data/**/.env*)",
       "Edit(/.env)",
       "Read(//**/ルミナス_非公開/**)",
-      "Read(//**/env_backups/**)"
+      "Read(//**/env_backups/**)",
+      "Edit(/data/.luminous_halt)",
+      "Write(/data/.luminous_halt)",
+      "Edit(**/data/.luminous_halt)",
+      "Write(**/data/.luminous_halt)"
     ]
   },
   "hooks": {
@@ -68,6 +72,16 @@
       }
     ],
     "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'P=\"${CLAUDE_PROJECT_DIR:-$PWD}\"; if [ -e \"$P/data/.luminous_halt\" ] || [ -L \"$P/data/.luminous_halt\" ]; then bash \"$P/.claude/hooks/halt-guard.sh\"; rc=$?; [ \"$rc\" = 0 ] && exit 0; echo \"全体停止中（data/.luminous_halt）\" >&2; exit 2; fi; exec bash \"$P/.claude/hooks/halt-guard.sh\"'",
+            "timeout": 10
+          }
+        ]
+      },
       {
         "matcher": "Edit|Write|NotebookEdit",
         "hooks": [

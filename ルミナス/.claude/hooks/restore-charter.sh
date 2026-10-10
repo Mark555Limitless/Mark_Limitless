@@ -8,6 +8,11 @@ ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 INPUT="$(cat 2>/dev/null || true)"
 SID="$(hook_session_id "$INPUT")"
 mkdir -p "$ROOT/state/.sessions" && date +%s > "$ROOT/state/.sessions/$SID.start"
+# 全体停止中なら最初に大きく表示する（理由は「データ」。1 行・200 字・制御文字なし。docs/specs/20261008_global_halt.md）
+if [ -e "$ROOT/data/.luminous_halt" ] || [ -L "$ROOT/data/.luminous_halt" ]; then
+  echo "!!!!! 全体停止中（data/.luminous_halt）。外部AI・Codex・判断層・書き込みの道具は動きません。解除は Mark が端末で: bash tools/luminous_halt.sh off"
+  echo "      理由（データ）: $(head -n 1 "$ROOT/data/.luminous_halt" 2>/dev/null | hook_sanitize_line 200)"
+fi
 
 emit() {
 echo "=== ルミナス憲章の復元（SessionStart hook / session $SID） ==="

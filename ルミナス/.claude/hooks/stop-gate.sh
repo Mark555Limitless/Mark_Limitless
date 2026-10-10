@@ -11,6 +11,7 @@ ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 INPUT="$(cat)"
 [ "$(hook_json_get "$INPUT" stop_hook_active)" = "true" ] && exit 0
 [ "${FABLE5_HEADLESS:-0}" = "1" ] && exit 0
+{ [ -e "$ROOT/data/.luminous_halt" ] || [ -L "$ROOT/data/.luminous_halt" ]; } && exit 0   # 全体停止中は終了を止めない（閉じ込めない。docs/specs/20261008_global_halt.md）
 SID="$(hook_session_id "$INPUT")"
 MARK="$ROOT/state/.sessions/$SID.start"
 [ -f "$MARK" ] || exit 0
