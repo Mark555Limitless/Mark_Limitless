@@ -3,6 +3,13 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-11 鍵を入れた・控えの置き場の整理（司令塔: Claude Opus 5.5・Mac デスクトップ版）
+- Mark の指示（原文）: 点検の結果を貼付（codex 稼働・gemini 認証 OK・上限 $0.25・jev 鍵あり 有効）。鍵の控えの扱いは「控えのフォルダを正規の置き場に」を選択。「過程の説明は不要。ボクに伝える必要がある部分だけ詳しく伝えて。これを恒久ルールにして記録して。」（[伝] は CLAUDE.md に記録済み）
+- 状態: Gemini（Google Cloud プロジェクト Luminous）と Jev の鍵が `.env`（600・git 管理外）に入り、`orch.health` は 3 つとも正常
+- 控え: 最初の 1 回は `LUMINOUS_PRIVATE_DIR` の無い古い端末タブで実行され、控えが clone の直下の `ルミナス_非公開/` にできていた（git の対象外で push はされていない）→ 非公開フォルダへ移した。控えは計 4 つ
+- PW Checker: カナリア走査が `.env` で始まるファイルを読むため、控えが次の定期便で漏洩と判定され伏せ字になる状態だった → Mark の選択で、非公開フォルダの `env_backups/` 直下の `.env.bak.*` だけを照合から外した（PW Checker 側の正典に記録）
+- 次の一手: `ルミナス/` で新しいセッションを開く → canary → `docs/mac-switch-audit.md` §3・§8 → 全体停止の実地確認 → uchg の後始末の指示書
+
 ## 2026-10-11 Gemini の上限を 1 日 $0.25 目安に（司令塔: Claude Opus 5.5・Mac デスクトップ版）
 - Mark の指示（原文）: 「キーの名前は「Component for Luminous」でお願い」「ルミナスの Gemini は 1 日 0.25ドル目安で設定してください」
 - 実施: `.env.example`・`orch/gemini.py` の既定値・`tests/test_gemini.py`（health の表示の期待値）・`docs/support-ai.md` を 0.25 に。記録 `state/decisions/20261011-gemini-dedicated-key-and-cap.md`
