@@ -3,6 +3,13 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-11 Gemini の鍵用に Google Cloud プロジェクト Luminous を新設（司令塔: Claude Opus 5.5・Mac デスクトップ版）
+- Mark の指示（原文）: 「上記1,2,3,4はそちらで作業を代行してください。」（Google Cloud でプロジェクト作成 → AI Studio へ読み込み → 鍵の作成 → 請求先の設定）
+- 決定: 分譲指示書 §3.3 ① は「ルミナス専用に新規発行」。Gemini は fable5 と別の Google Cloud プロジェクト `Luminous`（ID `luminous-511308`・組織なし）で鍵を作る
+- 状態: プロジェクト作成・AI Studio への読み込みは済み。請求先は作成時に自動で `My Billing Account`（Tier 2・前払い）に紐づいた。この前払いの残高は fable5 の画像プロジェクト（Image for Fable5 AI NEWS app）と共有
+- 鍵の作成の最後のボタンと鍵のコピーは Mark が行う（鍵の値を司令塔の画面やログに入れないため。PW の規則）。Jev（TypeSafe）の鍵も Mark が発行する
+- 次の一手: Mark が鍵を作る → `.env.example` を `.env` に写す → `set_env_key.sh` で 2 本 → `orch.health`
+
 ## 2026-10-11 恒久ルール [伝]（Mark への伝え方）の書き込みと hooks・Mac の試験と LUMINOUS_PRIVATE_DIR の確認（司令塔: Claude Opus 5.5・Mac デスクトップ版）
 - Mark の指示（原文）: 「git pull して、試験 2 本を流して。そのあと LUMINOUS_PRIVATE_DIR が Claude提供用 の下の ルミナス_非公開 を指しているか確かめて。」「[1] 今後は過程の説明は不要。ボクに伝える必要がある部分だけ詳しく伝えて。これを恒久ルールとして、CLAUDE.md、ROUTINE.md、digest、Obsidian、☆ルミナス_最終プロンプト.docxなどの必要なファイルに書き込んで毎回読み込むようにしてください。hooksも活用してください。」
 - 試験（変更前）: pull は最新のまま（f30dfc2）。test-hooks 244 passed・0 failed、pytest 323 passed・4 skipped・警告 61（uchg の後始末の既知の問題）
