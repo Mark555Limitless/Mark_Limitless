@@ -22,7 +22,7 @@
 | | 中身 | ルミナスでの実装 |
 |---|---|---|
 | ①固定コマンド | 必ずラッパー経由で、毎回同じコマンド | `tools/codex_impl.sh`・`tools/codex_opinion.sh`・`python3 -m orch.gemini`・`python3 -m orch.decisions` |
-| ②上限 | 日・月ごとの金額と回数。超えたら呼ばずに理由を返す | `ORCH_GEMINI_DAILY_USD_CAP`（既定 $1/日）、`ORCH_JEV_DAILY_MAX`（60回/日）・`ORCH_JEV_MONTHLY_USD`（$1/月）。Codex は同時 1 本（ロック） |
+| ②上限 | 日・月ごとの金額と回数。超えたら呼ばずに理由を返す | `ORCH_GEMINI_DAILY_USD_CAP`（既定 $0.25/日の目安。Mark の決定 2026-10-11）、`ORCH_JEV_DAILY_MAX`（60回/日）・`ORCH_JEV_MONTHLY_USD`（$1/月）。Codex は同時 1 本（ロック） |
 | ③記録 | 1回1行。本文・鍵・生のエラーは書かない | `data/usage.jsonl`（全ベンダー共通）、`logs/gemini.log`・`logs/jev.log`、`data/decisions_shadow.jsonl`（問いと答え、5MB で打ち切り）、`data/codex_runs/` |
 | ④点検 | 鍵・疎通・当日の支出を1行で。セッション開始時に毎回表示 | `python3 -m orch.health`（SessionStart hook が表示。`FABLE5_HEADLESS=1` では出さない） |
 | ⑤停止スイッチ | 環境変数とファイルの2通り | `ORCH_CODEX=0`／`data/.codex_disabled`、`ORCH_GEMINI=0`／`data/.gemini_disabled`、`ORCH_JEV=0`／`data/.jev_disabled` |

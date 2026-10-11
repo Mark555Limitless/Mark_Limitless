@@ -128,7 +128,7 @@ def test_ledger_row_per_call(keyed, monkeypatch, isolated_env):
 def test_check_status(keyed, monkeypatch):
     monkeypatch.setattr(gemini.requests, "get", lambda url, **k: FakeResp(200, {"name": "m"}))
     ok, line = gemini.check_status()
-    assert ok and "認証=OK" in line and "上限 $1.00" in line and KEY not in line
+    assert ok and "認証=OK" in line and "上限 $0.25" in line and KEY not in line
     ok, line = gemini.check_status(net=False)
     assert "疎通は未確認" in line
 

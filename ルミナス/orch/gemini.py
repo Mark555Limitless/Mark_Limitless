@@ -75,7 +75,7 @@ def daily_usd() -> float:
 
 
 def daily_cap() -> float:
-    return config.env_float("ORCH_GEMINI_DAILY_USD_CAP", 1.0)
+    return config.env_float("ORCH_GEMINI_DAILY_USD_CAP", 0.25)  # 1 日 $0.25 目安（Mark の決定 2026-10-11）
 
 
 def _post_with_timeout(url: str, headers: Dict[str, str], body: Dict[str, Any], timeout: float) -> requests.Response:

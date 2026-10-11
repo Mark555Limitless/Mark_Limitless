@@ -3,6 +3,12 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-11 Gemini の上限を 1 日 $0.25 目安に（司令塔: Claude Opus 5.5・Mac デスクトップ版）
+- Mark の指示（原文）: 「キーの名前は「Component for Luminous」でお願い」「ルミナスの Gemini は 1 日 0.25ドル目安で設定してください」
+- 実施: `.env.example`・`orch/gemini.py` の既定値・`tests/test_gemini.py`（health の表示の期待値）・`docs/support-ai.md` を 0.25 に。記録 `state/decisions/20261011-gemini-dedicated-key-and-cap.md`
+- 直接修正の記録: `orch/gemini.py` の既定値 1 行と試験の期待値 1 行（値の変更だけ。守りの判定は触っていない）
+- `.env` はまだ無い（Mark が `.env.example` から作る）。作れば 0.25 が入る
+
 ## 2026-10-11 Gemini の鍵用に Google Cloud プロジェクト Luminous を新設（司令塔: Claude Opus 5.5・Mac デスクトップ版）
 - Mark の指示（原文）: 「上記1,2,3,4はそちらで作業を代行してください。」（Google Cloud でプロジェクト作成 → AI Studio へ読み込み → 鍵の作成 → 請求先の設定）
 - 決定: 分譲指示書 §3.3 ① は「ルミナス専用に新規発行」。Gemini は fable5 と別の Google Cloud プロジェクト `Luminous`（ID `luminous-511308`・組織なし）で鍵を作る
