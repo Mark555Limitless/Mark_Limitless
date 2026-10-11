@@ -3,6 +3,15 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-11 clone ごと置き場所を移した（司令塔: Claude Opus 5.5・Mac デスクトップ版）
+- Mark の指示（原文）: 「ルミナス を下記パスに移しました。」（`ルミナス/` だけを clone の外へ移した）→ git の外に出て pull・push・git フックが効かなくなったため選択肢を示し、Mark が「Mark_Limitless ごと移す」を選んだ
+- 状態: clone ごと Mac の `Claude提供用/` の下へ移し、`ルミナス/` を clone に戻した（ADR 2026-10-11 の決定 1 のとおり単独のリポジトリにはしない）。移動の前後で追跡中の 108 ファイルの中身は一致。core.hooksPath は相対なので変更なし
+- 移動で壊れたもの: `.venv` の pip などの実行ファイルが作成時の絶対パスを持つため動かなくなる → `.venv` を作り直した。今後: clone を移したら `rm -rf .venv && bash scripts/setup.sh`
+- 試験（新しい場所）: test-hooks 191/191・pytest 272 passed 4 skipped
+- PW Checker: カナリア走査の正規保管場所を新しい `ルミナス/.env` へ付け替えた（clone は PW Checker の走査範囲に入った）
+- Mark の確認待ち（保護ファイル）: CLAUDE.md:4 と ROUTINE §6 の「正本は Mac の正本フォルダ・GitHub は写し」を「正本は clone の ルミナス/」へ直す差分（ADR 決定 1）
+- 次の一手: Mark が新しい場所で新しいセッションを開く → canary → `docs/mac-switch-audit.md` §3 → 全体停止の実地確認 → uchg の後始末の指示書
+
 ## 2026-10-11 Mac で pull と試験 2 本（司令塔: Claude Opus 5.5・Mac デスクトップ版）
 - Mark の指示（原文）: 「git pull して、試験 2 本を流して」
 - 結果: HEAD `9538d2b`。`bash scripts/test-hooks.sh` は **191 passed・0 failed**。`.venv/bin/python -m pytest tests -q` は **272 passed・4 skipped**（skip は環境条件付きのもので想定どおり）。前回の 21 件の失敗はすべて解消
