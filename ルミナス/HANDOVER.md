@@ -9,7 +9,7 @@
 - LUMINOUS_PRIVATE_DIR: settings.local.json の env で、Claude提供用 の下の ルミナス_非公開 を絶対パスで指す（フォルダは実在）。この値はセッションを ルミナス/ で開いたときだけ効く
 - [伝] の書き込み: CLAUDE.md に「Mark への伝え方」節（正本）、ROUTINE §2 と §5（hooks 表）、最終プロンプト §6（docx を再生成し、非公開フォルダの写しも更新）。hooks: 新しい `.claude/hooks/tell-rule.sh` を UserPromptSubmit に登録し、restore-charter.sh が SessionStart の先頭で同じ文を出す。試験 3 件を追加し test-hooks 247 passed・0 failed
 - 保護ファイル（CLAUDE.md・ROUTINE・settings.json・hooks・最終プロンプト）の変更は Mark の指示による。次の SessionStart の「保護ファイルがコミットで変わりました」の警告はこの変更
-- 次の一手: package-lock.json の中身を確かめてコミット（決定 2）→ `docs/mac-switch-audit.md` §3・§8 → 全体停止の実地確認（0〜5）→ uchg の後始末の指示書
+- 次の一手: ~~package-lock.json の中身を確かめてコミット（決定 2）~~ 済み（`56abe14`。docx 9.9.0・取得元はすべて registry.npmjs.org・integrity あり。別のセッションが先にコミットしていた）→ `docs/mac-switch-audit.md` §3・§8 → 全体停止の実地確認（0〜5）→ uchg の後始末の指示書
 
 ## 2026-10-11 監査の残り 39 件の反証と修正・Mark の決定 4 点・docx の非公開フォルダへの写し（司令塔: クラウド。Fable 5.1 → Opus 5.5）
 - Mark の指示（原文）: 「今後は過程の説明は不要。ボクに伝える必要がある部分だけ詳しく伝えて。」→ 運用プロンプト §6 に追記済み（Mark 承認）。「1はい 2はい 3はい 4見送り」（ADR `state/decisions/20261011-mac-operation-decisions.md`）。「/Users/…/ルミナス_非公開/☆ルミナス_最終プロンプト.docx にも最終プロンプトを入れておいてください」
