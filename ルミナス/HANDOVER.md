@@ -3,6 +3,16 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-11 監査の残り 39 件の反証と修正・Mark の決定 4 点・docx の非公開フォルダへの写し（司令塔: クラウド。Fable 5.1 → Opus 5.5）
+- Mark の指示（原文）: 「今後は過程の説明は不要。ボクに伝える必要がある部分だけ詳しく伝えて。」→ 運用プロンプト §6 に追記済み（Mark 承認）。「1はい 2はい 3はい 4見送り」（ADR `state/decisions/20261011-mac-operation-decisions.md`）。「/Users/…/ルミナス_非公開/☆ルミナス_最終プロンプト.docx にも最終プロンプトを入れておいてください」
+- 状態: 監査の残り 39 件（利用枠の上限で未反証だったもの）を現行コードで反証 → 今も起きる 16・文書 6・Mac のみ 7・直り済み 8・誤り 2。Mark の判断が要らない 17 件を修正し、Opus の審査 2 視点（各 1 回差し戻し → 反映 → APPROVE）。試験 hooks 244 件・pytest 325 件通過（2 件は Mac 専用で skip）
+- 主な修正: docx は md が変わったときだけ再生成（毎回作ると追跡中の docx が汚れ、codex_impl が「未コミットの変更」で止まり続けた）。Codex の違反・ロック・入れ子の .git があるうちは node を動かさない。保護ファイルがコミット（pull を含む）で変わったら SessionStart で警告。全体停止中は Obsidian 同期と docx の写しも見送る。Codex の実行中は Stop ゲートが催促しない（PID は 2 以上の数字だけ）。compact で開始時刻を上書きしない。setup.sh は git 管理外で exit 1（git init を勧めない）と hooks の確かめ方の案内。scope_check は読めないフォルダで止まる（表示は相対パス）。halt.log はフォルダごと（inode）。chflags -h。data/・logs/ は 700。根と ルミナス/ の .gitignore に Mac のメタデータと鍵の名前。`.gitattributes`（記録 3 つを merge=union。保護の対象に追加）
+- docx の写し（Mark の依頼）: SessionEnd が、`LUMINOUS_PRIVATE_DIR` が絶対パスの既存フォルダを指すとき、最新の docx を写す（中身が違うときだけ・mktemp・リンクは辿らない・パスはログに書かない・停止中や Codex の未処理のときは写さない）。設定があるのに写せなければ「失敗」と書き、次の SessionStart が警告する。**公開リポジトリには Mac のパスを書いていない**
+- **Mark の承認待ち（保護ファイル）**: CLAUDE.md:4・41 と ROUTINE §3・§5（行 17・42・86）・§6 の差分（正本＝clone の ルミナス/、docx は md が変わったときだけ、LUMINOUS_PRIVATE_DIR に docx を写すこと、pull/push の手順）、`.claude/settings.json` の ask に `Edit(/.gitattributes)`（権限の設定）
+- **Mac で行うこと**: `git pull` → `bash scripts/test-hooks.sh` と `.venv/bin/python -m pytest tests -q` → `package-lock.json` の中身を確かめてコミット・push（決定 2）→ `LUMINOUS_PRIVATE_DIR` が Mark の指定した非公開フォルダを指すか確かめる（Bash で `echo "${LUMINOUS_PRIVATE_DIR:-unset}"`。値はチャットに貼らなくてよい）→ `docs/mac-switch-audit.md` §3 と §8 の確認 → 全体停止の実地確認（0〜5）
+- 別件（次の候補）: 実行前から読めない**ファイル**は mode だけ記録され、Codex が開けて書いて戻すと見落とす（審査役が再現）。コミット検知の範囲に tools/・orch/・docs/review.md を足す案。Stop ゲートは使い回された PID を実行中とみなす（codex-lock-guard と判定をそろえるため _lib は変えていない）。HANDOVER の古い節の「1 つの halt.log」は今は「フォルダごとの halt.<番号>.log」
+- 事故は無し（今回の Workflow には「リポジトリの外を変えない」を明記。終了後の `git status --ignored` も変化なし）
+
 ## 2026-10-10 深夜 Mac 切替の監査 → 確定 56 件＋Mac 実測の不具合を実装・審査・コミット（司令塔: Claude Fable 5.1・クラウド）
 - **Mark の指示（2026-10-11、原文）**: 「今後は過程の説明は不要。ボクに伝える必要がある部分だけ詳しく伝えて。」→ 報告の決まり: 経過・手順・途中の状況は書かない。結果、Mark の判断や操作が要ること、危険・事故・費用、次に Mark がすることだけを詳しく。中間報告も同じ。運用プロンプト（保護ファイル）への 1 行の追記は差分を見せて承認を受ける
 - Mark の指示（原文）: 「クラウドセッション版からMacデスクトップ版に戻してください。それにより改善されるものがないか監査して、改善および修復できるものは即実行してください。」「作業中に利用制限に達しましたが、現在はリセットされています。中断したところから続けてください。」
