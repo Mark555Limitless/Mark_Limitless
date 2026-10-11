@@ -14,7 +14,8 @@
 - §8.2（アプリの Bash とアプリの Terminal パネルの比較）: PATH は同じ（ハッシュ一致）、node・npm・jq・python3・git・claude は同じ場所、timeout・gtimeout はどちらも無い、`/usr/bin/python3` はどちらも動く。違いは `LUMINOUS_OBSIDIAN_DIR`・`LUMINOUS_TZ`・`GATE_MODE`・`STOP_GATE` がアプリだけ（設計どおり）と、ロケール（アプリ C・端末 C.UTF-8）。SessionEnd の記録には sync-obsidian の「8 件」があり、「未設定のためスキップ」「node が無い」は無い（期待どおり）。開き直しの SessionStart の比較は Cmd+Q の後に
 - hooks の発火（§3-1 の代わり。アプリでは `/hooks`・`/permissions` が使えないので `settings.json` と実際の動作で代えた）: SessionStart（憲章の注入）・UserPromptSubmit（[伝]）・PreToolUse（halt-guard・guard-protected）・PostToolUse（`.edited` の印）・Stop（未更新で止めた）は発火を確認
 - §3-7 (d) PostModelSwitch: 司令塔がアプリの機能で試験用セッションのモデルを切り替えると、`state/escalations.log` に機械記入の行が即時に 1 行増えた（期待どおり。作業名・理由・結果は追記済み）。**Mark がこのセッションのモデル選択で Sonnet 5.5 にして Opus 5.5 に戻した操作では増えなかった**（原因は未確定。アプリが次のターンまで切替を送らず、戻したので変化なしになった可能性）
-- §3-7 (e)・§8.7 SessionEnd: **`/clear` → 発火**（sync-obsidian 8 件・docx の再生成・非公開フォルダへの写し）。**閉じる（アーカイブ）→ 発火**（同じ 3 行）。`/clear` した後のセッションを閉じたときは発火しない（`/clear` の時点で終わっていて、次の発言まで起動しないため。SessionStart(clear) の印も無かった）。Cmd+Q は Mark の操作で最後に
+- §3-7 (e)・§8.7 SessionEnd: **`/clear` → 発火**（sync-obsidian 8 件・docx の再生成・非公開フォルダへの写し）。**閉じる（アーカイブ）→ 発火**（同じ 3 行）。`/clear` した後のセッションを閉じたときは発火しない（`/clear` の時点で終わっていて、次の発言まで起動しないため。SessionStart(clear) の印も無かった）。**Cmd+Q（アプリの終了）→ 発火**（sync-obsidian 8 件・「最終プロンプトに変更なし（docx 再生成を省略）」＝docx のコミットで作り直しが止まった）
+- §8.2 開き直し: Cmd+Q の後に開き直したこのセッションの SessionStart（resume）の注入に「!!! git フック」「動く python3 もありません」「点検の結果が出ませんでした」「前回の SessionEnd で失敗」は無かった。外部AIの点検 3 行も正常。開き直しの前後でアプリの Bash の環境（PATH・道具・環境変数・ロケール）は同じ
 - §8.3 グローバルの SessionStart（Mark が `!` で一覧。User の設定の SessionStart は 9 本、`env` は空、managed-settings は無い）: **作業フォルダの条件はどれにも無く、ルミナスのセッションに Fable5 AI NEWS Select の恒久ルール要約（2 分割）・役割別モデル構成・PW Checker の恒久ルール（2 分割）とキャッチアップ判定・脳でんちの恒久ルールが毎回入る**（このセッションの文脈にも入っていた）。副作用: ルミナスのファイルへの書き込み・送信は無い（compact のときだけ Claude の会話の置き場の中に要約を書く）。`FABLE5_HEADLESS` の判定は役割別モデル構成と compact の 2 本だけ無い。ほかは有り
 - docx: 最初の SessionEnd で最終プロンプトの docx を作り直した（md と docx が同じコミットで変わっていたので、仕様どおり作り直す側）。作業ツリーの docx がコミットと違ううちは毎回作り直して写すので、作り直した docx をこのセッションでコミットした
 - 費用: Codex 1 回（訓練、約 40 秒・status ok）。外部AIの有料呼び出し 0 件・$0。調べもの（公式文書の確認）にサブエージェント Sonnet を 1 体
@@ -26,8 +27,9 @@
   5. （軽）停止中に使える読む道具は Read だけ（このアプリのセッションには Grep・Glob が無い）
   6. （軽・直さない）guard-protected は、保護ファイルのパスを含むコマンドを、写す先が使い捨ての場所でも止める（安全側の誤検知）
   7. （影響なし）Bash の環境に `CLAUDE_PROJECT_DIR` が無い
-- 未解決: Cmd+Q の SessionEnd と、開き直しの SessionStart の注入に警告が無いか（§8.7 (c)・§8.2）。上の 1 の Mark の判断、2 の Mark の承認
-- 次の一手: Mark が Cmd+Q → アプリを開き直してこのセッションに発言 → 司令塔が `.session-end.log` と SessionStart の注入を見て、この節に追記してコミット
+- これで `docs/mac-switch-audit.md` §3・§8 の Mac でだけ確かめる項目と全体停止の実地確認は終わり（§3-4 は本物の Codex ではなく写しと代役で確認）
+- 未解決: 上の 1 の Mark の判断（グローバルの SessionStart）、2 の Mark の承認（`term_codex` の ps を UTF-8 で呼ぶ修正。前回の §8.6 `_is_real_git` の大文字小文字〔軽〕と一緒に指示書にできる）、3 の再確認。push は未実施（Mark の確認が要る）
+- 次の一手: Mark の判断・承認を受けて、2 と §8.6 の指示書 → Codex → 試験 → Opus 審査 → コミット
 
 ## 2026-10-11 夜 Jev の鍵の入れ替えと Gemini の鍵の復元（司令塔: Claude Opus 5.5・Mac デスクトップ版）
 - 経緯: Jev の鍵が端末の通常のプロンプトに貼られ、司令塔が端末の画面を読んだため会話ログに全文が入った（PW Checker の rotation_check ⑤。その鍵は `.env` には入っていない）。Mark が別の Jev の鍵を入れ直す際に `.env.example` を `.env` に写し直したため、Gemini の鍵が消えていた（点検で「鍵なし」）
