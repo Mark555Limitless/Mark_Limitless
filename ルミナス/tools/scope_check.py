@@ -162,8 +162,15 @@ def _git_entry(full: str) -> dict:
     return {"t": "git", "v": "special:%o" % st.st_mode}
 
 
+# 大文字小文字・NFC/NFD を区別しないボリュームでは、git と Python の realpath の綴りがずれる。
+# パスの文字列ではなく、同じファイルを指すかで本物の .git を判定する。
 def _is_real_git(full: str, real_git: str) -> bool:
-    return bool(real_git) and not os.path.islink(full) and os.path.realpath(full) == real_git
+    if not real_git or os.path.islink(full):
+        return False
+    try:
+        return os.path.samefile(full, real_git)
+    except OSError:
+        return False
 
 
 def snapshot(root: str, real_gitdir: str = "") -> Dict[str, dict]:

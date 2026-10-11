@@ -5,6 +5,7 @@ import json
 import os
 import pty
 import shutil
+import shlex
 import signal
 import stat
 import subprocess
@@ -483,6 +484,83 @@ def test_scope_check_git_name_is_case_insensitive(tmp_path):
         assert sc.snapshot(str(d))["files"][name]["t"] == "git"
 
 
+@pytest.fixture
+def scope_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sc", ROOT / "tools" / "scope_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    return sc
+
+
+def test_scope_check_real_git_case_alias(tmp_path, scope_module):
+    real = tmp_path / "Lum" / ".git"
+    real.mkdir(parents=True)
+    alias = tmp_path / "lum"
+    if not alias.exists():
+        pytest.skip("大文字小文字を区別するボリュームでは別綴りの同一フォルダを試せない")
+    sc = scope_module
+    assert sc._is_real_git(str(alias / ".git"), os.path.realpath(real))
+    assert ".git" not in sc.snapshot(str(alias), str(real))["files"]
+
+
+def test_scope_check_real_git_unicode_alias(tmp_path, scope_module):
+    import unicodedata
+    # ガは NFC/NFD で綴りが異なる（ルミナスだけでは同じ綴りになる）。
+    name = "ルミナス・ガ"
+    real = tmp_path / unicodedata.normalize("NFC", name) / ".git"
+    alias = tmp_path / unicodedata.normalize("NFD", name) / ".git"
+    real.mkdir(parents=True)
+    if not alias.exists():
+        pytest.skip("NFC/NFD を区別するボリュームでは正規化違いの同一フォルダを試せない")
+    assert scope_module._is_real_git(str(alias), os.path.realpath(real))
+
+
+def test_scope_check_real_git_rejects_other_link_missing_and_empty(tmp_path, scope_module):
+    real = tmp_path / "a" / ".git"
+    other = tmp_path / "b" / ".git"
+    link = tmp_path / "c" / ".git"
+    real.mkdir(parents=True)
+    other.mkdir(parents=True)
+    link.parent.mkdir()
+    link.symlink_to(real, target_is_directory=True)
+    sc = scope_module
+    assert not sc._is_real_git(str(other), str(real))
+    assert not sc._is_real_git(str(link), str(real))
+    assert not sc._is_real_git(str(tmp_path / "missing"), str(real))
+    assert not sc._is_real_git(str(real), "")
+    assert not sc._is_real_git(str(real), str(tmp_path / "missing"))
+
+
+def test_scope_check_real_git_permission_error(tmp_path, scope_module, monkeypatch):
+    def denied(*args):
+        raise PermissionError("試験用のアクセス拒否")
+    monkeypatch.setattr(scope_module.os.path, "samefile", denied)
+    assert not scope_module._is_real_git(str(tmp_path), str(tmp_path))
+
+
+def test_scope_check_real_git_distinct_case(tmp_path, scope_module):
+    first = tmp_path / "Lum2" / ".git"
+    second = tmp_path / "lum2" / ".git"
+    first.mkdir(parents=True)
+    if second.parent.exists():
+        pytest.skip("大文字小文字を区別しないボリュームでは異なる2フォルダを作れない")
+    second.mkdir(parents=True)
+    assert not scope_module._is_real_git(str(first), str(second))
+    assert not scope_module._is_real_git(str(second), str(first))
+
+
+def test_scope_check_quarantine_preserves_real_git_case_alias(tmp_path, scope_module):
+    real = tmp_path / "Lum" / ".git"
+    real.mkdir(parents=True)
+    alias = tmp_path / "lum"
+    if not alias.exists():
+        pytest.skip("大文字小文字を区別するボリュームでは別綴りの同一フォルダを試せない")
+    moved, failed = scope_module.quarantine_git(str(alias), {"files": {}}, str(tmp_path / "quarantine"), str(real))
+    assert moved == [] and failed == []
+    assert real.is_dir()
+
+
 @pytest.mark.parametrize("mode", ["negative_usd", "nan_usd", "badjson"])
 def test_bad_ledger_append_is_violation(proj, mode):
     _seed_ledger(proj[0])
@@ -649,8 +727,10 @@ def _make_halt(proj, text="2026-10-10T00:00:00Z 試験\n"):
     _halt_path(proj).write_text(text, encoding="utf-8")
 
 
-def _halt_cmd(proj, *args, stdin=subprocess.DEVNULL):
-    return subprocess.run([BASH, "tools/luminous_halt.sh", *args], cwd=proj[0], env=env_for(proj, "x"),
+def _halt_cmd(proj, *args, stdin=subprocess.DEVNULL, extra_env=None):
+    env = env_for(proj, "x", extra_env)
+    env = {k: v for k, v in env.items() if v is not None}
+    return subprocess.run([BASH, "tools/luminous_halt.sh", *args], cwd=proj[0], env=env,
                           capture_output=True, text=True, stdin=stdin, timeout=90)
 
 
@@ -724,6 +804,159 @@ def test_halt_terminated_impl_wrapper_exits_7(proj, tmp_path, own_session):
     assert _safe_halt_log(proj).read_text(encoding="utf-8").count(" on ") == 1
     rows = [json.loads(l) for l in (tmp_path / "data" / "usage.jsonl").read_text(encoding="utf-8").splitlines()]
     assert rows[-1]["vendor"] == "codex" and rows[-1]["status"] == "error" and rows[-1]["purpose"] == "s"  # 起動はした
+
+
+def _halt_c_env(proj):
+    env = env_for(proj, "x")
+    for key in list(env):
+        if key == "LANG" or key.startswith("LC_"):
+            env[key] = None  # _halt_cmd で子の環境から除く（pytest の LC_CTYPE も除く）
+    env.update(LC_ALL="C", LANG="C")
+    return env
+
+
+@pytest.mark.parametrize("inherited,outputs,expected_calls,reason,term", [
+    ("", {("", "command="): "WRAPPER"}, [("", "command=")], "", True),
+    ("C", {}, [("C", "command="), ("C", "args=")], "動いていない", False),
+    ("C", {("C", "args="): "WRAPPER"}, [("C", "command="), ("C", "args=")], "", True),
+    ("C", {("C", "command="): "/bin/sh other", ("en_US.UTF-8", "args="): "WRAPPER"},
+     [("C", "command="), ("en_US.UTF-8", "command="), ("en_US.UTF-8", "args=")], "", True),
+    ("C", {("C", "command="): "/bin/bash /escaped/path", ("C.UTF-8", "args="): "WRAPPER"},
+     [("C", "command="), ("en_US.UTF-8", "command="), ("en_US.UTF-8", "args="),
+      ("C.UTF-8", "command="), ("C.UTF-8", "args=")], "", True),
+    ("C", {("C", "command="): "/bin/sh other", ("en_US.UTF-8", "command="): "/bin/bash -c",
+           ("C.UTF-8", "command="): "/bin/bash /other/script"},
+     [("C", "command="), ("en_US.UTF-8", "command="), ("C.UTF-8", "command=")], "ラッパー（bash）ではない", False),
+    ("C", {("C", "command="): "/bin/bash -c", ("en_US.UTF-8", "command="): "/bin/sh other",
+           ("C.UTF-8", "command="): "/bin/bash /other/script"},
+     [("C", "command="), ("en_US.UTF-8", "command="), ("C.UTF-8", "command=")], "ラッパーの形でない", False),
+    ("C", {("C", "command="): "/bin/bash /escaped/path", ("en_US.UTF-8", "command="): "/bin/sh other",
+           ("C.UTF-8", "command="): "/bin/bash -c"},
+     [("C", "command="), ("en_US.UTF-8", "command="), ("C.UTF-8", "command=")], "tools/codex_impl.sh・codex_opinion.sh ではない", False),
+])
+def test_halt_ps_locale_retry_branches(tmp_path, inherited, outputs, expected_calls, reason, term):
+    """ps と kill を模擬して、再試行順・空出力・初回理由・ロケールの範囲を直接確かめる。"""
+    p = tmp_path / "ルミナス"
+    (p / "tools").mkdir(parents=True)
+    lock = p / "data" / "codex_runs" / ".lock"
+    lock.mkdir(parents=True)
+    (lock / "owner").write_text("42 1000\n", encoding="utf-8")
+    ps_calls = tmp_path / "ps.calls"
+    term_calls = tmp_path / "term.calls"
+    source = (ROOT / "tools" / "luminous_halt.sh").read_text(encoding="utf-8")
+    functions = source[source.index("etime_secs() {"):source.index("# TERM を送った後:")]
+    cases = []
+    for (locale, field), output in outputs.items():
+        if output == "WRAPPER":
+            output = f"/bin/bash {p}/tools/codex_impl.sh docs/specs/s.md low"
+        cases.append(f"{shlex.quote(locale + '|' + field)}) printf '%s\\n' {shlex.quote(output)} ;;")
+    script = f"""set -u
+unset CDPATH
+PROJ={shlex.quote(str(p))}
+PROJ_REAL="$PROJ"
+TERM_PID=""
+ps() {{
+  printf '%s|%s\\n' "${{LC_ALL-unset}}" "$2" >> {shlex.quote(str(ps_calls))}
+  case "$2" in stat=) echo S; return;; etime=) echo 00:01; return;; esac
+  case "${{LC_ALL-unset}}|$2" in
+    {chr(10).join(cases)}
+  esac
+}}
+kill() {{ [ "$1" != -TERM ] || printf '%s\\n' "$2" >> {shlex.quote(str(term_calls))}; }}
+date() {{ echo 1000; }}
+{functions}
+set -- original arguments
+term_codex
+rc=$?
+[ "$1" = original ] && [ "$2" = arguments ] || exit 90
+[ "$LC_ALL" = {shlex.quote(inherited)} ] || exit 91
+exit "$rc"
+"""
+    env = {k: v for k, v in os.environ.items() if k != "LANG" and not k.startswith("LC_")}
+    env.update(LC_ALL=inherited, LANG="C")
+    r = subprocess.run([BASH], input=script, env=env, capture_output=True, text=True, timeout=10)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert reason in r.stdout
+    assert ("TERM を送りました" in r.stdout) == term
+    assert term_calls.exists() == term
+    calls = ps_calls.read_text(encoding="utf-8").splitlines()
+    expected = [inherited + "|stat="] + [locale + "|" + field for locale, field in expected_calls]
+    if term:
+        expected.append(inherited + "|etime=")
+        assert term_calls.read_text(encoding="utf-8") == "42\n"
+    assert calls == expected
+
+
+def test_halt_c_locale_terminated_impl_wrapper_exits_7(proj):
+    locales = subprocess.run(["locale", "-a"], capture_output=True, text=True, check=True).stdout.splitlines()
+    if not {"en_US.UTF-8", "en_US.utf8", "C.UTF-8", "C.utf8"}.intersection(locales):
+        pytest.skip("ps の再照合に必要な en_US.UTF-8 / C.UTF-8 がインストールされていない")
+    p = proj[0]
+    # ps の2語目に日本語が含まれる絶対パスで起動し、C ロケールの不具合を再現する。
+    proc = subprocess.Popen([BASH, str(p / "tools" / "codex_impl.sh"), "docs/specs/s.md", "low"],
+                            cwd=p, env=env_for(proj, "sleep"), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        _wait_launch(proj)
+        time.sleep(0.3)
+        t0 = time.monotonic()
+        r = _halt_cmd(proj, "on", "C ロケールで止める", extra_env=_halt_c_env(proj))
+        assert r.returncode == 0 and "TERM を送りました" in r.stdout, (r.stdout, r.stderr)
+        out, err = proc.communicate(timeout=60)
+        assert proc.returncode == 7, (out, err)
+        assert time.monotonic() - t0 < 25
+        assert not (p / "data" / "codex_runs" / ".lock").exists()
+        assert not (p / "data" / ".codex_violation").exists()
+        assert _halt_path(proj).exists() and "再作成" not in _halt_path(proj).read_text(encoding="utf-8")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+
+
+def test_halt_c_locale_without_utf8_ps_does_not_term(proj, tmp_path):
+    real_ps = shutil.which("ps")
+    assert real_ps is not None
+    fake = tmp_path / "ps-bin" / "ps"
+    fake.parent.mkdir()
+    fake.write_text("#!/bin/sh\nLC_ALL=C exec " + shlex.quote(real_ps) + ' "$@"\n', encoding="utf-8")
+    fake.chmod(0o700)
+    env = _halt_c_env(proj)
+    env["PATH"] = str(fake.parent) + os.pathsep + env["PATH"]
+    p = proj[0]
+    proc = subprocess.Popen([BASH, str(p / "tools" / "codex_impl.sh"), "docs/specs/s.md", "low"],
+                            cwd=p, env=env_for(proj, "sleep"), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        _wait_launch(proj)
+        time.sleep(0.3)
+        r = _halt_cmd(proj, "on", "UTF-8 が使えない", extra_env=env)
+        assert r.returncode == 0 and "送りません" in r.stdout and "送りました" not in r.stdout, (r.stdout, r.stderr)
+        assert proc.poll() is None
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=60)
+        assert proc.returncode == 7, (out, err)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+
+
+def test_halt_c_locale_does_not_term_other_script(proj):
+    p = proj[0]
+    script = p / "tools" / "other_sleep.sh"
+    script.write_text("sleep 30\n", encoding="utf-8")
+    proc = subprocess.Popen([BASH, str(script)], cwd=p, start_new_session=True)
+    try:
+        lock = p / "data" / "codex_runs" / ".lock"
+        lock.mkdir(parents=True, exist_ok=True)
+        (lock / "owner").write_text(f"{proc.pid} {int(time.time())}\n", encoding="utf-8")
+        r = _halt_cmd(proj, "on", "別の脚本", extra_env=_halt_c_env(proj))
+        assert r.returncode == 0 and "送りません" in r.stdout and "送りました" not in r.stdout, (r.stdout, r.stderr)
+        time.sleep(0.3)
+        assert proc.poll() is None
+    finally:
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait()
 
 
 def test_halt_eraser_codex_deleting_marker_is_violation_and_marker_recreated(proj):

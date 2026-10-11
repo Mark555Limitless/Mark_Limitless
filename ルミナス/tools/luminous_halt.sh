@@ -64,8 +64,24 @@ wrapper_alive() {  # PID が動いているか。ゾンビ（終わったが親�
   case "$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' ')" in Z*) return 1;; esac
   return 0
 }
+wrapper_matches() {  # $1=ps の引数、$2=PID。位置引数はこの関数の中だけで分ける
+  local args="$1" pid="$2" a0 a1 real
+  set -f; set -- $args; set +f   # 空白で分ける（グロブ展開はしない）。パスに空白があれば一致せず、送らない側に倒れる
+  a0="${1:-}"; a1="${2:-}"
+  case "${a0##*/}" in bash) ;; *) echo "luminous_halt: PID $pid はルミナスのラッパー（bash）ではないため TERM は送りません"; return 1;; esac
+  # 相対パスは PROJ を基に解く。これはラッパーが PROJ から起動されたとき（Mac の Claude Code は PROJ で Bash を動かす）だけ一致する。
+  # 親フォルダから相対パスで起動されたときは一致せず、送らない側に倒れる（ラッパー自身が実行後に印と記録を見て止まる）
+  case "$a1" in /*) ;; ''|-*) echo "luminous_halt: PID $pid の引数がラッパーの形でないため TERM は送りません"; return 1;; *) a1="$PROJ/$a1";; esac
+  real="$(cd "$(dirname "$a1")" 2>/dev/null && pwd -P)/$(basename "$a1")"
+  case "$real" in "$PROJ_REAL/tools/codex_impl.sh"|"$PROJ_REAL/tools/codex_opinion.sh") ;;
+    *) echo "luminous_halt: PID $pid はルミナスの tools/codex_impl.sh・codex_opinion.sh ではないため TERM は送りません"; return 1;; esac
+  return 0
+}
+# ロケール C の ps は非 ASCII をエスケープするため、アプリの Bash（ロケール C）では日本語のパスが一致しない。
+# 引き継いだロケール、en_US.UTF-8、C.UTF-8 の順で試す（Linux には en_US.UTF-8 が無いことがある）。
+# ロケールを変えるのは照合用の ps だけ。どの回も同じ照合条件を使い、TERM を送る条件は緩めない。
 term_codex() {
-  local lock="$PROJ/data/codex_runs/.lock" owner pid ts args a0 a1 real et secs start now
+  local lock="$PROJ/data/codex_runs/.lock" owner pid ts args reason matched ps_locale et secs start now
   [ -d "$lock" ] || return 0
   owner="$lock/owner"
   [ -s "$owner" ] || sleep 1   # 取ったばかりで持ち主がまだ書かれていないことがある
@@ -76,15 +92,16 @@ term_codex() {
   wrapper_alive "$pid" || { echo "luminous_halt: ロックの持ち主（PID ${pid}）は動いていないため TERM は送りません"; return 0; }
   args="$(ps -o command= -p "$pid" 2>/dev/null)"; [ -n "$args" ] || args="$(ps -o args= -p "$pid" 2>/dev/null)"
   [ -n "$args" ] || { echo "luminous_halt: ロックの持ち主（PID ${pid}）は動いていないため TERM は送りません"; return 0; }
-  set -f; set -- $args; set +f   # 空白で分ける（グロブ展開はしない）。パスに空白があれば一致せず、送らない側に倒れる
-  a0="${1:-}"; a1="${2:-}"
-  case "${a0##*/}" in bash) ;; *) echo "luminous_halt: PID $pid はルミナスのラッパー（bash）ではないため TERM は送りません"; return 0;; esac
-  # 相対パスは PROJ を基に解く。これはラッパーが PROJ から起動されたとき（Mac の Claude Code は PROJ で Bash を動かす）だけ一致する。
-  # 親フォルダから相対パスで起動されたときは一致せず、送らない側に倒れる（ラッパー自身が実行後に印と記録を見て止まる）
-  case "$a1" in /*) ;; ''|-*) echo "luminous_halt: PID $pid の引数がラッパーの形でないため TERM は送りません"; return 0;; *) a1="$PROJ/$a1";; esac
-  real="$(cd "$(dirname "$a1")" 2>/dev/null && pwd -P)/$(basename "$a1")"
-  case "$real" in "$PROJ_REAL/tools/codex_impl.sh"|"$PROJ_REAL/tools/codex_opinion.sh") ;;
-    *) echo "luminous_halt: PID $pid はルミナスの tools/codex_impl.sh・codex_opinion.sh ではないため TERM は送りません"; return 0;; esac
+  if ! reason="$(wrapper_matches "$args" "$pid")"; then
+    matched=0
+    for ps_locale in en_US.UTF-8 C.UTF-8; do
+      args="$(LC_ALL="$ps_locale" ps -o command= -p "$pid" 2>/dev/null)"
+      [ -n "$args" ] || args="$(LC_ALL="$ps_locale" ps -o args= -p "$pid" 2>/dev/null)"
+      [ -n "$args" ] || continue
+      if wrapper_matches "$args" "$pid" >/dev/null; then matched=1; break; fi
+    done
+    [ "$matched" -eq 1 ] || { printf '%s\n' "$reason"; return 0; }
+  fi
   # 持ち主の記録の時刻は、起動の後 5 分以内（PID の使い回しを避ける）
   et="$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')"; secs="$(etime_secs "$et")"
   now="$(date +%s)"; start=$(( now - secs ))
