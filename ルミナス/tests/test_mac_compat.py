@@ -7,6 +7,7 @@ import importlib.util
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -14,6 +15,7 @@ import typing
 import unicodedata
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -740,3 +742,207 @@ def test_braced_reference_survives_utf8_locale_in_system_bash():
     env = dict(os.environ, LC_ALL="C.UTF-8")
     r = subprocess.run(["/bin/bash", "-c", 'set -u; X=1; printf "%s" "${X}）"'], capture_output=True, env=env)
     assert r.returncode == 0 and r.stdout.decode("utf-8") == "1）", (r.returncode, r.stdout, r.stderr)
+
+
+# ---- pytest の一時領域: 過去の停止印の救済と、今後の uchg の置き忘れ防止 ----
+@pytest.mark.skipif(not hasattr(os, "chflags"), reason="os.chflags が無い")
+def test_immutable_cleanup_preserves_other_flags(tmp_path):
+    from tests.conftest import _clear_immutable
+    root = tmp_path / "root"
+    marker = root / "t" / "ルミナス" / "data" / ".luminous_halt"
+    marker.parent.mkdir(parents=True)
+    marker.touch()
+    locked_dir = root / "locked"
+    locked_dir.mkdir()
+    originals = {p: os.lstat(p).st_flags for p in (root, locked_dir, marker)}
+    try:
+        for p, flags in originals.items():
+            os.chflags(p, flags | stat.UF_IMMUTABLE | stat.UF_NODUMP, follow_symlinks=False)
+        assert _clear_immutable(root) == 0
+        for p, flags in originals.items():
+            assert os.lstat(p).st_flags == (flags | stat.UF_NODUMP) & ~stat.UF_IMMUTABLE
+        assert _clear_immutable(root) == 0
+    finally:
+        for p, flags in originals.items():
+            os.chflags(p, flags, follow_symlinks=False)
+
+
+@pytest.mark.skipif(not hasattr(os, "chflags"), reason="os.chflags が無い")
+def test_immutable_cleanup_symlink_targets_untouched(tmp_path):
+    from tests.conftest import _clear_immutable
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "victim"
+    victim.touch()
+    (root / "link").symlink_to(victim)
+    (root / "dirlink").symlink_to(outside, target_is_directory=True)
+    root_link = tmp_path / "root_link"
+    root_link.symlink_to(outside, target_is_directory=True)
+    flags = os.lstat(victim).st_flags
+    try:
+        os.chflags(victim, flags | stat.UF_IMMUTABLE, follow_symlinks=False)
+        assert _clear_immutable(root) == 0
+        assert os.lstat(victim).st_flags & stat.UF_IMMUTABLE
+        assert _clear_immutable(root_link) == 0
+        assert os.lstat(victim).st_flags & stat.UF_IMMUTABLE
+    finally:
+        os.chflags(victim, flags, follow_symlinks=False)
+
+
+@pytest.mark.skipif(not hasattr(os, "chflags"), reason="os.chflags が無い")
+def test_stale_halt_cleanup_only_garbage_markers(tmp_path):
+    from tests.conftest import _sweep_stale_halt_markers
+    root = tmp_path / "fake_root"
+    marker = root / "garbage-a" / "t0" / "ルミナス" / "data" / ".luminous_halt"
+    untouched = [marker.with_name("other.txt"), root / "garbage-a" / "t0" / ".luminous_halt",
+                 root / "pytest-7" / "t1" / "ルミナス" / "data" / ".luminous_halt",
+                 root / "other-project" / "data" / ".luminous_halt"]
+    for p in [marker] + untouched:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch()
+    garbage_file = root / "garbage-file"
+    garbage_file.touch()
+    originals = {p: os.lstat(p).st_flags for p in [marker, garbage_file] + untouched}
+    try:
+        for p, flags in originals.items():
+            os.chflags(p, flags | stat.UF_IMMUTABLE | stat.UF_NODUMP, follow_symlinks=False)
+        assert _sweep_stale_halt_markers(root) == 0
+        assert os.lstat(marker).st_flags == (originals[marker] | stat.UF_NODUMP) & ~stat.UF_IMMUTABLE
+        for p in [garbage_file] + untouched:
+            assert os.lstat(p).st_flags == originals[p] | stat.UF_IMMUTABLE | stat.UF_NODUMP
+        assert all(p.exists() for p in originals)  # 削除は pytest 自身の仕事
+    finally:
+        for p, flags in originals.items():
+            os.chflags(p, flags, follow_symlinks=False)
+
+
+@pytest.mark.skipif(not hasattr(os, "chflags"), reason="os.chflags が無い")
+def test_stale_halt_cleanup_symlink_targets_untouched(tmp_path):
+    from tests.conftest import _sweep_stale_halt_markers
+    root = tmp_path / "fake_root"
+    data = root / "garbage-a" / "data"
+    data.mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere"
+    victim = elsewhere / "data" / ".luminous_halt"
+    victim.parent.mkdir(parents=True)
+    victim.touch()
+    (root / "garbage-lnk").symlink_to(elsewhere, target_is_directory=True)
+    (root / "garbage-a" / "nested").symlink_to(elsewhere, target_is_directory=True)
+    (data / ".luminous_halt").symlink_to(victim)
+    root_link = tmp_path / "root_link"
+    root_link.symlink_to(root, target_is_directory=True)
+    flags = os.lstat(victim).st_flags
+    try:
+        os.chflags(victim, flags | stat.UF_IMMUTABLE, follow_symlinks=False)
+        assert _sweep_stale_halt_markers(root) == 0
+        assert os.lstat(victim).st_flags & stat.UF_IMMUTABLE
+        assert _sweep_stale_halt_markers(root_link) == 0
+        assert os.lstat(victim).st_flags & stat.UF_IMMUTABLE
+    finally:
+        os.chflags(victim, flags, follow_symlinks=False)
+
+
+@pytest.mark.parametrize("kind", ["missing", "file"])
+def test_stale_halt_cleanup_invalid_root(tmp_path, kind):
+    from tests.conftest import _sweep_stale_halt_markers
+    root = tmp_path / kind
+    if kind == "file":
+        root.touch()
+    assert _sweep_stale_halt_markers(root) == 0
+
+
+def test_pytest_cleanup_without_chflags(tmp_path, monkeypatch):
+    from tests.conftest import _clear_immutable, _sweep_stale_halt_markers
+    monkeypatch.delattr(os, "chflags", raising=False)
+    assert _clear_immutable(tmp_path) == 0
+    assert _sweep_stale_halt_markers(tmp_path) == 0
+
+
+def test_pytest_cleanup_temproot_basetemp(tmp_path):
+    from tests.conftest import _pytest_temproot
+    assert _pytest_temproot(SimpleNamespace(option=SimpleNamespace(basetemp=str(tmp_path)))) is None
+
+
+@pytest.mark.parametrize("source", ["env", "default", "empty_env"])
+def test_pytest_cleanup_temproot(tmp_path, monkeypatch, source):
+    from tests import conftest
+    monkeypatch.setattr(conftest.getpass, "getuser", lambda: "test-user")
+    monkeypatch.setattr(conftest.tempfile, "gettempdir", lambda: str(tmp_path))
+    if source == "default":
+        monkeypatch.delenv("PYTEST_DEBUG_TEMPROOT", raising=False)
+    else:
+        monkeypatch.setenv("PYTEST_DEBUG_TEMPROOT", str(tmp_path) if source == "env" else "")
+    config = SimpleNamespace(option=SimpleNamespace(basetemp=None))
+    assert conftest._pytest_temproot(config) == tmp_path.resolve() / "pytest-of-test-user"
+
+
+def test_pytest_cleanup_temproot_unknown_user(tmp_path, monkeypatch):
+    from tests import conftest
+    def missing_user():
+        raise KeyError("unknown uid")
+    monkeypatch.setattr(conftest.getpass, "getuser", missing_user)
+    monkeypatch.setenv("PYTEST_DEBUG_TEMPROOT", str(tmp_path))
+    config = SimpleNamespace(option=SimpleNamespace(basetemp=None))
+    assert conftest._pytest_temproot(config) == tmp_path.resolve() / "pytest-of-unknown"
+
+
+def test_stale_halt_cleanup_foreign_owner(tmp_path, monkeypatch):
+    from tests import conftest
+    calls = []
+    monkeypatch.setattr(os, "chflags", lambda *a, **kw: calls.append(a), raising=False)
+    with monkeypatch.context() as mp:
+        mp.setattr(os, "lstat", lambda p: SimpleNamespace(st_mode=stat.S_IFDIR, st_uid=-1))
+        assert conftest._sweep_stale_halt_markers(tmp_path) == 0
+    assert calls == []
+
+
+@pytest.mark.parametrize("helper", ["_clear_immutable", "_sweep_stale_halt_markers"])
+def test_pytest_cleanup_counts_failures_and_continues(tmp_path, monkeypatch, helper):
+    from tests import conftest
+    paths = [tmp_path / "garbage-a" / "t0" / "data" / ".luminous_halt",
+             tmp_path / "garbage-a" / "t1" / "data" / ".luminous_halt"]
+    for p in paths:
+        p.parent.mkdir(parents=True)
+        p.touch()
+    lstat = os.lstat
+    calls = []
+    def fake_lstat(p):
+        info = lstat(p)
+        return SimpleNamespace(st_mode=info.st_mode, st_uid=info.st_uid,
+                               st_flags=stat.UF_IMMUTABLE | stat.UF_NODUMP if Path(p) in paths else 0)
+    def denied(p, flags, *, follow_symlinks):
+        calls.append((Path(p), flags, follow_symlinks))
+        if Path(p) == paths[0]:
+            raise PermissionError("denied")
+    with monkeypatch.context() as mp:
+        mp.setattr(os, "lstat", fake_lstat)
+        mp.setattr(os, "chflags", denied, raising=False)
+        assert getattr(conftest, helper)(tmp_path) == 1
+    assert set(calls) == {(p, stat.UF_NODUMP, False) for p in paths}
+
+
+@pytest.mark.parametrize("basetemp", [None, "explicit"])
+def test_pytest_cleanup_sessionstart(tmp_path, monkeypatch, basetemp):
+    from tests import conftest
+    calls = []
+    monkeypatch.setenv("PYTEST_DEBUG_TEMPROOT", str(tmp_path))
+    monkeypatch.setattr(conftest.getpass, "getuser", lambda: "test-user")
+    monkeypatch.setattr(conftest, "_sweep_stale_halt_markers", lambda root: calls.append(root))
+    config = SimpleNamespace(option=SimpleNamespace(basetemp=basetemp))
+    conftest.pytest_sessionstart(SimpleNamespace(config=config))
+    assert calls == ([tmp_path.resolve() / "pytest-of-test-user"] if basetemp is None else [])
+
+
+def test_pytest_cleanup_isolated_env_teardown(tmp_path, monkeypatch):
+    from tests import conftest
+    calls = []
+    with monkeypatch.context() as mp:
+        mp.setattr(conftest, "_clear_immutable", lambda root: calls.append(root))
+        fixture = conftest.isolated_env.__wrapped__(tmp_path, mp)
+        assert next(fixture) == tmp_path
+        assert calls == []
+        with pytest.raises(StopIteration):
+            next(fixture)
+        assert calls == [tmp_path]

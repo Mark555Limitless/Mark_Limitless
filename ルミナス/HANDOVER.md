@@ -3,6 +3,21 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-11 Mac でだけ確かめる項目（hooks に依らない分）と、試験の後に uchg が残る問題の修正（司令塔: Claude Opus 5.5・Mac デスクトップ版）
+- Mark の指示（原文）: 残る作業 3 つ（「1. 監査報告にある、Mac でだけ確かめる項目の確認 2. 全体停止の実地確認 3. 試験のあとに消せないファイルが残る問題を直す指示書」）を貼付。点検の結果（3 つとも正常）を貼付。「過程の説明は不要。ボクに伝える必要がある部分だけ詳しく伝えて。これを恒久ルールにして記録して。」（[伝] は CLAUDE.md ほかに記録済み。司令塔の memory にも追記）
+- このセッションは clone の根（Mark_Limitless）で開いたため、ルミナスの hooks と権限は未読込（canary が通る）。hooks・権限・アプリの画面の操作が要る項目と全体停止の実地確認は、`ルミナス/` で開くセッションに残した
+- 期待どおり: §3-3（CLT あり・`/usr/bin/python3` 3.9.6 が動く・jq あり）／§8.1（toplevel は clone の根・入れ子の .git の誤検知なし・ホームと書類に .git なし）／§8.4（worktree なし・置き場は既定の `<repo>/.claude/worktrees`）／§8.5 の安全な置き場（端末とアプリで同じ。`LUMINOUS_SAFE_DIR`・`XDG_CACHE_HOME` はどちらも未設定）／§8.6 の論理パスと実パス（同じ）／§8.9（test-hooks 247 passed・0 failed、`${!n+x}` は ok、perl の alarm は rc=142）／§3-5（`on` が印に uchg を付ける試験が Mac で通過。本物の `data/` での確認は実地確認で）／§3-6（Codex は独自のプロセスグループで動いた。子の `codex-code-mode-host` は別のグループだったが Codex と一緒に終わり、検査は OK）
+- **期待と違った点 2 つ**（次の修正の候補。どちらも `tools/` で保護ファイルなので、Mark の承認後に Codex の流れで直す）
+  1. §8.5 ps の非 ASCII（重さ: 中）: アプリの Bash はロケールが C で、`ps -o command=` が「Claude提供用」「ルミナス」をエスケープ（`M-fM^O…`）して出す。端末（C.UTF-8）ではそのまま出る。**司令塔がアプリの Bash で `luminous_halt.sh on` を打つと、実行中の Codex のラッパーに TERM が届かない**（安全側: 印はでき、ラッパーは Codex が終わった後に印を見て止まる。最長で Codex の 1 回分＝5〜15 分遅れる）。Mark が端末で打てば届く。直し方の候補: `term_codex` の `ps` を UTF-8 のロケール（`LC_ALL=en_US.UTF-8`。Mac には必ずある）で呼ぶ
+  2. §8.6 大文字小文字（重さ: 軽）: 大文字小文字を区別しないボリュームで、`git rev-parse --absolute-git-dir` は実際の綴り（`Lum`）、Python の realpath は打った綴り（`lum`）を返す。`tools/scope_check.py` の `_is_real_git` を「同じファイルか」（samefile）で比べる修正を候補に
+- uchg の後始末: 指示書 `docs/specs/20261011_pytest_uchg_cleanup.md` → Codex（341 秒・終了 0・変更は ALLOWED の 2 ファイルだけ）→ pytest **341 passed・4 skipped・警告 61 → 0**、試験の後の一時フォルダの uchg **15 → 0** → Opus 審査 **APPROVE**（名指しの 8 点すべて満たす。軽 3 件）
+  - 審査の軽い指摘: ③ユーザー名が空のとき `unknown` にする → 1 行で直した（直接修正の記録: `tests/conftest.py` の 1 行。対象の試験 18 件通過）。①根がリンクのときの掃除の試験が弱い（実装は正しい。リンク先に本物の uchg 付きの印を置く試験に強める）・②`isolated_env.__wrapped__` は pytest の内部に頼る（無ければ skip に）は未対応（次に試験を触るときに）
+  - なぜ起きたか: 10-11 朝の Mac の試験（各 fixture に `chflags -R nouchg` が入る前のコード）が、全体停止の印の写し 15 個に uchg を残した。pytest は実行のたびに消そうとして失敗し、毎回 61 件の警告を出していた。pytest の一時フォルダの根は同じユーザーのすべての pytest で共有なので、**Fable5 の試験の出力にも同じ警告が出ていた**（Fable5 のファイルは変えていない）。今のコードは新しい残りを作らないが、試験を途中で止めると同じことが起きうる
+  - 何をしたか: `tests/conftest.py` に、各試験の後で一時フォルダの uchg を外す処理と、pytest の開始時に前回までの消し損ね（`garbage-*` の中の `data/.luminous_halt` だけ）の uchg を外す処理を足した。消すのは pytest 自身。リンクの先・`pytest-<番号>`（同時に走る別の試験）・他のプロジェクトのファイルには触らない。試験 18 件を追加
+  - 今後どうするか: 試験を途中で止めても、次の実行で自動で片付く
+- 未完（`ルミナス/` で開くセッションと Mark の操作が要る）: §3-1（`/hooks`）・§3-2（環境変数）・§3-4（実行中のラッパーへの TERM）・§3-7 (a)〜(e)・§8.2（開き直しの比較）・§8.3（グローバルの SessionStart）・§8.4 の `CLAUDE_PROJECT_DIR`・§8.7（閉じ方ごとの SessionEnd）、全体停止の実地確認
+- 次の一手: Mark がデスクトップアプリで New session → Local → フォルダに `ルミナス/` を選ぶ（worktree は使わない・権限のモードは既定）→ 司令塔が canary → 上の未完を進める。Mark の操作は `/hooks`・`/permissions` を見る、確認のダイアログで「いいえ」、`/model` の切替 1 回、閉じる・`/clear`・Cmd+Q を 1 回ずつ、全体停止の解除（端末で `bash tools/luminous_halt.sh off` →「解除」）と停止中の `ls -lO data/.luminous_halt`（停止中は司令塔の Bash が止まるため）
+
 ## 2026-10-11 鍵を入れた・控えの置き場の整理（司令塔: Claude Opus 5.5・Mac デスクトップ版）
 - Mark の指示（原文）: 点検の結果を貼付（codex 稼働・gemini 認証 OK・上限 $0.25・jev 鍵あり 有効）。鍵の控えの扱いは「控えのフォルダを正規の置き場に」を選択。「過程の説明は不要。ボクに伝える必要がある部分だけ詳しく伝えて。これを恒久ルールにして記録して。」（[伝] は CLAUDE.md に記録済み）
 - 状態: Gemini（Google Cloud プロジェクト Luminous）と Jev の鍵が `.env`（600・git 管理外）に入り、`orch.health` は 3 つとも正常
