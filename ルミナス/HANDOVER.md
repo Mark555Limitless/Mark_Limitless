@@ -12,6 +12,21 @@
 - **Mac で行うこと**: `git pull` → `bash scripts/test-hooks.sh` と `.venv/bin/python -m pytest tests -q` → `package-lock.json` の中身を確かめてコミット・push（決定 2）→ `LUMINOUS_PRIVATE_DIR` が Mark の指定した非公開フォルダを指すか確かめる（Bash で `echo "${LUMINOUS_PRIVATE_DIR:-unset}"`。値はチャットに貼らなくてよい）→ `docs/mac-switch-audit.md` §3 と §8 の確認 → 全体停止の実地確認（0〜5）
 - 別件（次の候補）: 実行前から読めない**ファイル**は mode だけ記録され、Codex が開けて書いて戻すと見落とす（審査役が再現）。コミット検知の範囲に tools/・orch/・docs/review.md を足す案。Stop ゲートは使い回された PID を実行中とみなす（codex-lock-guard と判定をそろえるため _lib は変えていない）。HANDOVER の古い節の「1 つの halt.log」は今は「フォルダごとの halt.<番号>.log」
 - 事故は無し（今回の Workflow には「リポジトリの外を変えない」を明記。終了後の `git status --ignored` も変化なし）
+## 2026-10-11 clone ごと置き場所を移した（司令塔: Claude Opus 5.5・Mac デスクトップ版）
+- Mark の指示（原文）: 「ルミナス を下記パスに移しました。」（`ルミナス/` だけを clone の外へ移した）→ git の外に出て pull・push・git フックが効かなくなったため選択肢を示し、Mark が「Mark_Limitless ごと移す」を選んだ
+- 状態: clone ごと Mac の `Claude提供用/` の下へ移し、`ルミナス/` を clone に戻した（ADR 2026-10-11 の決定 1 のとおり単独のリポジトリにはしない）。移動の前後で追跡中の 108 ファイルの中身は一致。core.hooksPath は相対なので変更なし
+- 移動で壊れたもの: `.venv` の pip などの実行ファイルが作成時の絶対パスを持つため動かなくなる → `.venv` を作り直した。今後: clone を移したら `rm -rf .venv && bash scripts/setup.sh`
+- 試験（新しい場所）: test-hooks 191/191・pytest 272 passed 4 skipped
+- PW Checker: カナリア走査の正規保管場所を新しい `ルミナス/.env` へ付け替えた（clone は PW Checker の走査範囲に入った）
+- Mark の確認待ち（保護ファイル）: CLAUDE.md:4 と ROUTINE §6 の「正本は Mac の正本フォルダ・GitHub は写し」を「正本は clone の ルミナス/」へ直す差分（ADR 決定 1）
+- 次の一手: Mark が新しい場所で新しいセッションを開く → canary → `docs/mac-switch-audit.md` §3 → 全体停止の実地確認 → uchg の後始末の指示書
+
+## 2026-10-11 Mac で pull と試験 2 本（司令塔: Claude Opus 5.5・Mac デスクトップ版）
+- Mark の指示（原文）: 「git pull して、試験 2 本を流して」
+- 結果: HEAD `9538d2b`。`bash scripts/test-hooks.sh` は **191 passed・0 failed**。`.venv/bin/python -m pytest tests -q` は **272 passed・4 skipped**（skip は環境条件付きのもので想定どおり）。前回の 21 件の失敗はすべて解消
+- 見つけた不具合: pytest の後始末が、全体停止の印に付く `chflags uchg` を外さないため、一時フォルダ（`pytest-of-<user>/`）に消せないファイルが残る（1 回で 15 個・警告 61 件の大半）。試験の終わりに `chflags -R nouchg` してから消す必要がある。指示書に回す
+- このセッションは空の正本フォルダで開いたため hooks は未読込（canary が通る）。アプリでの作業フォルダ移動でも hooks は読み込まれない（実測）。実地確認と Claude Code 側の確認は、写しの `ルミナス/` で新しく開いたセッションで行う
+- 次の一手: 写しで新しいセッションを開く → canary → `docs/mac-switch-audit.md` §3 の Mac でだけ確かめる項目 → 全体停止の実地確認 → uchg の後始末の指示書
 
 ## 2026-10-10 深夜 Mac 切替の監査 → 確定 56 件＋Mac 実測の不具合を実装・審査・コミット（司令塔: Claude Fable 5.1・クラウド）
 - **Mark の指示（2026-10-11、原文）**: 「今後は過程の説明は不要。ボクに伝える必要がある部分だけ詳しく伝えて。」→ 報告の決まり: 経過・手順・途中の状況は書かない。結果、Mark の判断や操作が要ること、危険・事故・費用、次に Mark がすることだけを詳しく。中間報告も同じ。運用プロンプト（保護ファイル）への 1 行の追記は差分を見せて承認を受ける
