@@ -29,3 +29,4 @@
 2026-10-11T00:08:20Z | 司令塔セッション | claude-fable-5-1 | claude-opus-5-5 | Mark が /model で明示指定（PostModelSwitch hook はクラウドで走らないため手で記録） | 継続中
 2026-10-11T02:03:14Z | 監査の残り 39 件の反証・修正・審査 | claude-opus-5-5 | claude-opus-5-5（Workflow・Agent、model 明示） | 安全に直結する hooks と検査器の変更 | 反証 40 体・実装 3 体・審査 2 視点（各 1 回 REJECT → APPROVE）
 2026-10-11T11:01:58Z | uchg の後始末の差分のコード審査 | claude-opus-5-5 | claude-opus-5-5（Agent・model 明示） | コード審査は Opus（CLAUDE.md） | APPROVE（軽 3 件。1 件を 1 行で反映、2 件は次に）
+2026-10-11T16:11:02Z | SessionEnd の試験用セッション（PostModelSwitch の実地確認 §3-7 (d)） | claude-haiku-5-5 | claude-sonnet-5-5 | 司令塔がアプリの機能で試験用セッションのモデルを切り替え、機械記入の行が増えるかを確かめた（実作業には使っていない） | 機械記入の行が即時に 1 行増えた（期待どおり）

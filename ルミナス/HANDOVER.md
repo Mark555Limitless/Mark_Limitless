@@ -3,6 +3,32 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-12（10-11 深夜から）hooks が要る残りの確認と全体停止の実地確認（司令塔: Claude Opus 5.5・Mac デスクトップ版・`ルミナス/` で開いたセッション）
+- Mark の指示（原文）: 「残りの確認と全体停止の実地確認を進めて」。途中で「私の代わりに操作してください」（全体停止の解除について。→ 停止中は読む道具以外が止まり、AI が外せないことが守りそのものなので代われないと答え、Mark が端末で解除）
+- 状態: canary は断られた（hooks が効いている）。**このセッションの権限のモードは指示の前提（既定）と違い「Bypass permissions」だった**（親のセッションから引き継いだと推定。試験のため一時「Accept edits」へ下げたが、Mark のモデル切替の後に Bypass に戻っていた。戻った理由は未確定）
+- 決定・判断: `/hooks`・`/permissions` はこのアプリで使えないので、§3-1・§3-7 (c)・§8.3 は `settings.json`・Mark の `!` コマンド（§8.3）・実際の拒否と確認の動作で代えた。試しのセッションの `/clear` は Remote Control がオンだと司令塔の機能から実行できず Mark が打った。閉じる（アーカイブ）は司令塔がアプリの機能で行った
+- **全体停止の実地確認: 一巡を確認（期待どおり）**。司令塔がアプリの Terminal パネルで `luminous_halt.sh on` → Bash・Edit・Write・サブエージェントの起動・MCP の道具（Terminal パネルの一覧）がすべて「全体停止中」で断られ、Read だけが通った（このアプリのセッションには Grep・Glob の道具が無いので、停止中に使えるのは Read だけ）→ Mark が端末で `ls -lO` に `uchg`・`status` が停止中・`off`（「解除」）→ 印が消え、Bash が戻った。記録は `logs/halt.log`・安全な置き場の `halt.<番号>.log`（on と off の 2 行）・`state/halt.log`（off）。停止中は Stop の関門が終了を止めなかった（閉じ込めない）
+- §3-4（実行中のラッパーへの TERM）: 本物の Codex（意見役・訓練用のパケット）は約 40 秒で答え終わり、on の前に終わったので本物では確かめられなかった。代わりに、日本語を含むパスの使い捨ての写し（`luminous_halt.sh` は原本と同じハッシュ・ラッパーは同じ形でロックの持ち主を書く代役）で確かめた: **端末（C.UTF-8）から on → TERM が届いた**（代役は終了 7）／アプリの Bash（ロケール C）→ 届かない（既知の〔中〕）／アプリの Bash に `LC_ALL=en_US.UTF-8` → 届いた（直し方の候補が効くことを確認）
+- §3-7 (a) `head -c 0 .env`・(b) `git commit --no-verify --dry-run` は guard-protected が断った（期待どおり）。(c) `Read` の deny（`/.claude/settings.local.json`）は効いた。ask（`Edit(/docs/review.md)`）は **Accept edits でも Bypass permissions でも確認が出た**（Accept edits は Mark が誤って許可 → 戻した。Bypass の 2 回目は Mark が拒否し、編集は入らなかった）。Bypass の 1 回目は確認なしに通ったように見えたが、確認が出て許可されたかどうかは不明（Mark の記憶なし）。公式文書も「明示の ask はどのモードでも自動承認しない」「deny はどのモードでも効く」「`/` の根は開始したフォルダ」（`ルミナス/`）。`docs/review.md` は元どおり
+- §3-2: アプリの Bash に `LUMINOUS_OBSIDIAN_DIR` は届いている（`settings.local.json` の env）。§8.4: `pwd -P` は clone の `ルミナス/`・worktree なし。`CLAUDE_PROJECT_DIR` は Bash の環境には無い（hooks には届いて動いている。`scripts/sync-obsidian.sh` は無いときの既定値があるので影響なし）
+- §8.2（アプリの Bash とアプリの Terminal パネルの比較）: PATH は同じ（ハッシュ一致）、node・npm・jq・python3・git・claude は同じ場所、timeout・gtimeout はどちらも無い、`/usr/bin/python3` はどちらも動く。違いは `LUMINOUS_OBSIDIAN_DIR`・`LUMINOUS_TZ`・`GATE_MODE`・`STOP_GATE` がアプリだけ（設計どおり）と、ロケール（アプリ C・端末 C.UTF-8）。SessionEnd の記録には sync-obsidian の「8 件」があり、「未設定のためスキップ」「node が無い」は無い（期待どおり）。開き直しの SessionStart の比較は Cmd+Q の後に
+- hooks の発火（§3-1 の代わり。アプリでは `/hooks`・`/permissions` が使えないので `settings.json` と実際の動作で代えた）: SessionStart（憲章の注入）・UserPromptSubmit（[伝]）・PreToolUse（halt-guard・guard-protected）・PostToolUse（`.edited` の印）・Stop（未更新で止めた）は発火を確認
+- §3-7 (d) PostModelSwitch: 司令塔がアプリの機能で試験用セッションのモデルを切り替えると、`state/escalations.log` に機械記入の行が即時に 1 行増えた（期待どおり。作業名・理由・結果は追記済み）。**Mark がこのセッションのモデル選択で Sonnet 5.5 にして Opus 5.5 に戻した操作では増えなかった**（原因は未確定。アプリが次のターンまで切替を送らず、戻したので変化なしになった可能性）
+- §3-7 (e)・§8.7 SessionEnd: **`/clear` → 発火**（sync-obsidian 8 件・docx の再生成・非公開フォルダへの写し）。**閉じる（アーカイブ）→ 発火**（同じ 3 行）。`/clear` した後のセッションを閉じたときは発火しない（`/clear` の時点で終わっていて、次の発言まで起動しないため。SessionStart(clear) の印も無かった）。Cmd+Q は Mark の操作で最後に
+- §8.3 グローバルの SessionStart（Mark が `!` で一覧。User の設定の SessionStart は 9 本、`env` は空、managed-settings は無い）: **作業フォルダの条件はどれにも無く、ルミナスのセッションに Fable5 AI NEWS Select の恒久ルール要約（2 分割）・役割別モデル構成・PW Checker の恒久ルール（2 分割）とキャッチアップ判定・脳でんちの恒久ルールが毎回入る**（このセッションの文脈にも入っていた）。副作用: ルミナスのファイルへの書き込み・送信は無い（compact のときだけ Claude の会話の置き場の中に要約を書く）。`FABLE5_HEADLESS` の判定は役割別モデル構成と compact の 2 本だけ無い。ほかは有り
+- docx: 最初の SessionEnd で最終プロンプトの docx を作り直した（md と docx が同じコミットで変わっていたので、仕様どおり作り直す側）。作業ツリーの docx がコミットと違ううちは毎回作り直して写すので、作り直した docx をこのセッションでコミットした
+- 費用: Codex 1 回（訓練、約 40 秒・status ok）。外部AIの有料呼び出し 0 件・$0。調べもの（公式文書の確認）にサブエージェント Sonnet を 1 体
+- **期待と違った点（修正の候補・重さ）**
+  1. （中）ルミナスのセッションに Fable5・PW Checker・脳でんちの恒久ルールが毎回入る（文脈の消費と、別プロジェクトの規則との取り違えの恐れ。PW Checker のキャッチアップは、予定の日を逃したときにルミナスのセッションへ「PW Checker を実行せよ」と入りうる）。グローバルの設定は原本側なので、ルミナスからは変えない。案: グローバルのフックに「`CLAUDE_PROJECT_DIR` がルミナスなら Fable5・脳でんちの注入を省く」条件を足す（Fable5 の司令塔か Mark）。**Mark の判断待ち**
+  2. （中・既知）アプリの Bash から `luminous_halt.sh on` を打つと実行中のラッパーに TERM が届かない。直し方の候補 `LC_ALL=en_US.UTF-8` で届くことを写しで確認。`tools/` なので Mark の承認後に Codex の流れで
+  3. （軽）Mark のモデル選択での切替で PostModelSwitch の記録が増えなかった（未確定）。実際に別のモデルで 1 ターン動かしたときに記録されるかを、次にモデルを切り替えたときに見る
+  4. （軽）指示の前提（既定のモード）と違い Bypass permissions で開いていた。ask・deny・hooks は効くので守りは保たれるが、ほかの Bash・編集は確認なしで通る
+  5. （軽）停止中に使える読む道具は Read だけ（このアプリのセッションには Grep・Glob が無い）
+  6. （軽・直さない）guard-protected は、保護ファイルのパスを含むコマンドを、写す先が使い捨ての場所でも止める（安全側の誤検知）
+  7. （影響なし）Bash の環境に `CLAUDE_PROJECT_DIR` が無い
+- 未解決: Cmd+Q の SessionEnd と、開き直しの SessionStart の注入に警告が無いか（§8.7 (c)・§8.2）。上の 1 の Mark の判断、2 の Mark の承認
+- 次の一手: Mark が Cmd+Q → アプリを開き直してこのセッションに発言 → 司令塔が `.session-end.log` と SessionStart の注入を見て、この節に追記してコミット
+
 ## 2026-10-11 夜 Jev の鍵の入れ替えと Gemini の鍵の復元（司令塔: Claude Opus 5.5・Mac デスクトップ版）
 - 経緯: Jev の鍵が端末の通常のプロンプトに貼られ、司令塔が端末の画面を読んだため会話ログに全文が入った（PW Checker の rotation_check ⑤。その鍵は `.env` には入っていない）。Mark が別の Jev の鍵を入れ直す際に `.env.example` を `.env` に写し直したため、Gemini の鍵が消えていた（点検で「鍵なし」）
 - 対応: 直前の `.env` を控えに残してから、Gemini の鍵だけを控え（17:51 の版）から戻した。`orch.health` は gemini 認証=OK・jev 鍵あり・codex 稼働
