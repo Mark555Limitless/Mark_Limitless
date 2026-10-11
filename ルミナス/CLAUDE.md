@@ -1,7 +1,7 @@
 # ルミナス（Luminous）— 独自オーケストレーションAI 構築ノード／共通ルール（全エージェント）
 
 このフォルダが、オーケストレーションAI「ルミナス（Luminous）」の構想・憲章・運用設定・外部AI連携（`orch/`・`tools/`）を置くプロジェクトの根である。
-正本は Mark の Mac の正本フォルダ。GitHub の `Mark555Limitless/Mark_Limitless` 内の `ルミナス/` は写し（公開リポジトリ）であり、両者を同じ内容に保つ。
+正本は GitHub `Mark555Limitless/Mark_Limitless`（公開リポジトリ）を Mac に clone した中の `ルミナス/`。Mac の司令塔はここで起動する。クラウドのセッションは同じブランチで作業し、pull と push で同期する。
 hooks と権限は、このフォルダでセッションを開始したときに有効。応答・報告・質問は日本語。
 参考モデル: Sakana AI のスタイル（TRINITY の方針・実行・検証の役割分担、AB-MCTS の広げるか深めるか）。Fable5 AI NEWS Select の仕組み（分譲指示書 2026-10-08）を手本にする。原本は読むだけ。
 
@@ -38,7 +38,7 @@ hooks と権限は、このフォルダでセッションを開始したとき�
 3. `VIRTUAL_MARK.md` — 確認なしで自走できる範囲と、止まって確認する範囲
 4. `HANDOVER.md` の最新の節 — 引き継ぎ。ここから再開する
 5. `digest/` の最新 1 件、`obsidian/ルミナス.md` の「最新」節
-6. `prompts/ルミナス_最終プロンプト.md` — 自分の運用プロンプト（配布用 `☆ルミナス_最終プロンプト.docx` は SessionEnd で毎回再生成）
+6. `prompts/ルミナス_最終プロンプト.md` — 自分の運用プロンプト（配布用 `☆ルミナス_最終プロンプト.docx` は SessionEnd で、md が変わったときだけ再生成。`LUMINOUS_PRIVATE_DIR` があれば非公開フォルダにも写す）
 7. 外部AIの点検（`orch.health` の 3 行）
 
 ## 毎回書く（終了前。Stop hook が未更新なら終了を止める）

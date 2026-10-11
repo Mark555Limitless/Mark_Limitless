@@ -14,7 +14,7 @@
 | 4 | `HANDOVER.md` | 引き継ぎ（新しい節が先頭） | SessionStart hook が最新の節を注入 |
 | 5 | `digest/` の最新 1 件 | 前回の要約・判断・数値 | SessionStart hook が最後の見出しブロックを注入 |
 | 6 | `obsidian/ルミナス.md` | Obsidian 側の要約（「最新」節） | SessionStart hook が「最新」節を注入 |
-| 7 | `prompts/ルミナス_最終プロンプト.md` | 自分の運用プロンプト（正本） | SessionStart hook が冒頭を注入。docx は配布用で毎回再生成 |
+| 7 | `prompts/ルミナス_最終プロンプト.md` | 自分の運用プロンプト（正本） | SessionStart hook が冒頭を注入。docx は配布用で、md が変わったときだけ再生成（`LUMINOUS_PRIVATE_DIR` があれば非公開フォルダにも写す） |
 
 ## 1. セッション開始時の手順（司令塔）
 
@@ -39,8 +39,8 @@
 | 2 | `HANDOVER.md` | 先頭に新しい節（状態・やったこと・決定・未解決・次の一手） | 同上 |
 | 3 | `state/escalations.log` | モデル切替があれば追記 | 手動 |
 | 4 | `obsidian/ルミナス.md` | ハブノートの「最新」節を更新。digest をリンク | **Stop hook が未更新なら停止をブロック**。SessionEnd hook が `scripts/sync-obsidian.sh` で vault へ同期（`LUMINOUS_OBSIDIAN_DIR` 設定時） |
-| 5 | `prompts/ルミナス_最終プロンプト.md` → `☆ルミナス_最終プロンプト.docx` | 運用ルールが変わったときだけ md を更新 | SessionEnd hook が docx を毎回再生成 |
-| 6 | git | 作業ブランチにコミット（push は自走範囲内） | 手動（`guard-secrets.sh` が鍵の混入を止める） |
+| 5 | `prompts/ルミナス_最終プロンプト.md` → `☆ルミナス_最終プロンプト.docx` | 運用ルールが変わったときだけ md を更新 | SessionEnd hook が、md が変わったときだけ docx を再生成（`LUMINOUS_PRIVATE_DIR` があれば非公開フォルダにも写す） |
+| 6 | git | 書く前に `git pull`、コミットしたらすぐ作業ブランチへ push（クラウドと Mac の衝突を減らす。push は自走範囲内） | 手動（`guard-secrets.sh` が鍵の混入を止める） |
 
 ## 4. 定期ルーチン
 
@@ -83,14 +83,15 @@
   - `CODEX_DISABLE_FEATURES` — Codex に `--disable` で渡す機能名（既定 memories multi_agent）
   - `ORCH_CODEX` — `0` で Codex を止める（`data/.codex_disabled` と同じ。`docs/support-ai.md` の停止スイッチ）
   - `LUMINOUS_SETTLE_S` — Codex の終了後に検査まで待つ秒数（既定 2）
-  - `LUMINOUS_PRIVATE_DIR` — 鍵の控えの置き場（既定はこのフォルダの隣の `ルミナス_非公開/`。git の管理外であること）
+  - `LUMINOUS_PRIVATE_DIR` — 鍵の控えの置き場（既定はこのフォルダの隣の `ルミナス_非公開/`。git の管理外であること）。SessionEnd が最終プロンプトの docx もここへ写す（絶対パスで書く。`~` は不可。設定があるのに写せなければ「失敗」と記録し、次の SessionStart が警告する）
 - 書く場所: Mac では `.claude/settings.local.json` の `env`（例: `.claude/settings.local.json.example`）に書く。デスクトップアプリから開いたセッションの hooks には `.zshrc` の `export` が届かないことがあるので、シェルだけに書かない。`env` の値は `~` や `$HOME` を使わず絶対パスで書く。**クラウドセッションは `settings.local.json` を読まない**ので、環境側の環境変数に設定する
 - ゲートを一時的に外す必要があるとき（緊急時）は `LUMINOUS_STOP_GATE=off` を設定し、**今日の digest に「STOP_GATE=off: 理由」を書く**（書かないと解除されない）
 - jq も動く python3 も無いとき（Mac で Xcode コマンドラインツールが未導入だと `/usr/bin/python3` は「有るが動かない」）: hooks は止める側に倒れる。`guard-secrets.sh` はすべての `git commit`・`git push` を止め、`guard-protected.sh` は広く止める。直し方は `xcode-select --install` か jq の導入
 - SessionStart で「git フック（pre-commit / pre-push）が効いていません」と出たら、`bash scripts/setup.sh` を実行する（鍵の検査の本命が未設定）
 - 再現テスト: `scripts/test-hooks.sh`（使い捨てディレクトリだけに書き込む）
 
-## 6. ファイルの置き場（Mac 正本と写し）
+## 6. ファイルの置き場（正本と同期）
 
-- 正本: Mac の正本フォルダ（このフォルダで `claude` を起動する。初回に `scripts/setup.sh`）
-- 写し: GitHub `Mark555Limitless/Mark_Limitless` の `ルミナス/`。コミットで同期する
+- 正本: GitHub `Mark555Limitless/Mark_Limitless` を Mac に clone した `ルミナス/`（作業ブランチ `claude/dreamy-euler-k2f60s`）。ここで `claude` を起動する（デスクトップアプリは Project folder に指定し、worktree は使わない）。初回に `scripts/setup.sh`。clone を移したら `.venv` を作り直す（`rm -rf .venv && bash scripts/setup.sh`）
+- 同期: クラウドのセッションも同じブランチで作業する。記録（HANDOVER・digest・escalations.log）は書く前に `git pull`、書いたらすぐ `git push`。この 3 つは `.gitattributes` の merge=union で、両方の書き込みを残して自動でマージする
+- ルミナス単独のリポジトリにはしない（親の Mark_Limitless の一部のまま）。git 管理外のもの（`.env`・`data/`・`logs/`・`state/.sessions/`・非公開フォルダ）は pull では届かない

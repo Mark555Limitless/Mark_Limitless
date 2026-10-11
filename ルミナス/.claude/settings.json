@@ -35,7 +35,8 @@
       "Edit(/orch/**)",
       "Edit(/tools/**)",
       "Edit(/.env.example)",
-      "Edit(/docs/review.md)"
+      "Edit(/docs/review.md)",
+      "Edit(/.gitattributes)"
     ],
     "deny": [
       "Bash(printenv *)",
