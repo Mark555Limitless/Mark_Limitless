@@ -26,3 +26,4 @@
 2026-10-10T20:36:12Z | Mac 切替の監査（Workflow: 7 観点の洗い出し sonnet、批評・反証・整理 opus） | claude-fable-5-1 | claude-sonnet-5-5 / claude-opus-5-5（Agent・model 明示） | 洗い出しは集める作業（sonnet）、反証と判断は opus | 確定 56・反証 68。利用枠の上限で 91 件未反証。反証役の数体が環境を改ざん（事故）
 2026-10-10T20:36:12Z | Mac 切替の確定分の実装（3 群並列） | claude-fable-5-1 | claude-opus-5-5（Agent・model 明示） | hooks と検査器の変更は安全に直結するため opus | 3 群とも完了。試験 pytest 275 件通過・1 件 skip（Mac 専用の uchg の試験）・hooks 191 件通過（元 112 ＋ 新規 79）
 2026-10-10T20:36:12Z | Mac 切替の実装のコード審査（2 視点） | claude-fable-5-1 | claude-opus-5-5（Agent・model 明示） | コード審査は Opus（CLAUDE.md） | 2 視点とも 1 回目 REJECT（審査 1: タブ区切りの素通し・初回同期で vault の編集が消える／審査 2: 試験側の pty・署名・除外設定）→ 反映 → 2 回目 APPROVE。コミット済み
+2026-10-11T00:08:20Z | 司令塔セッション | claude-fable-5-1 | claude-opus-5-5 | Mark が /model で明示指定（PostModelSwitch hook はクラウドで走らないため手で記録） | 継続中
