@@ -59,6 +59,20 @@ printf 'ok\n' > "$N/top/ルミナス/clean.txt"; git -C "$N/top" add ルミナ�
 expect "setup 後: 鍵の無いコミットは通る" 0 git -C "$N/top" -c user.email=t@t -c user.name=t commit -q -m clean
 printf 'api_key = \"abcdefghijklmnop123\"\n' > "$N/top/ルミナス/bad.txt"; git -C "$N/top" add ルミナス/bad.txt
 expect "setup 後: pre-commit が鍵入りコミットを拒否（設定したフックが本当に効く）" 1 git -C "$N/top" -c user.email=t@t -c user.name=t commit -q -m bad
+# 4c) setup.sh: git 管理外（クラウドからのコピー・zip の展開）では git init を勧めず、.venv と npm の段は続けてから失敗で終わる
+NGD="$T/nongit/ルミナス"; mkdir -p "$NGD"; cp -R "$HERE/scripts" "$HERE/.githooks" "$NGD/"
+SB2="$T/setupbin2"; mkdir -p "$SB2"; for c in bash env git dirname chmod cat; do [ -e "$SB/$c" ] && ln -s "$SB/$c" "$SB2/$c"; done
+printf '#!/bin/sh
+: > "%s"
+exit 0
+' "$T/npm-called" > "$SB2/npm"; chmod +x "$SB2/npm"   # 偽の npm（呼ばれたことだけ残す）
+OUT="$(env PATH="$SB2" GIT_CEILING_DIRECTORIES="$T" bash "$NGD/scripts/setup.sh" 2>&1)"; RC=$?
+[ "$RC" = 1 ] && printf '%s' "$OUT" | grep -q 'git init はしないこと' && printf '%s' "$OUT" | grep -q 'git clone した写しの ルミナス/' && [ ! -e "$NGD/.git" ] \
+  && ok "setup: git 管理外では git init を勧めず失敗で終わる (exit $RC)" || ng "setup: git 管理外 (exit ${RC})"
+[ -e "$T/npm-called" ] && ok "setup: git 管理外でも npm の段は止めない" || ng "setup: git 管理外で npm の段が止まった"
+printf '%s' "$OUT" | grep -q 'true luminous-hook-canary' && printf '%s' "$OUT" | grep -q 'state/.sessions/' && ok "setup: 最後の案内に hooks が効いているかの確かめ方（canary・state/.sessions）がある" || ng "setup: 確かめ方の案内"
+OUT="$(env PATH="$SB" bash "$T/nest-link/top/ルミナス/scripts/setup.sh" 2>&1)"
+! printf '%s' "$OUT" | grep -q '!!!' && ok "setup: git の中では警告を出さない" || ng "setup: git の中で警告が出た"
 
 # 5) SessionStart → Stop ゲート
 SID='{"session_id":"test-1","source":"startup"}'
@@ -263,6 +277,7 @@ rm -f "$HALT"; printf '2026-10-10T00:00:00Z 試験の理由\n' > "$HALT"
 [ "$(gp "rm -f data/.luminous_halt")" = 2 ] && ok "guard-protected: Bash の rm で印を消すのを止める" || ng "guard-protected: rm 印"
 [ "$(gp "echo x > data/.luminous_halt")" = 2 ] && ok "guard-protected: Bash のリダイレクトで印を書き換えるのを止める" || ng "guard-protected: > 印"
 [ "$(gp "echo x > tools/luminous_halt.sh")" = 2 ] && ok "guard-protected: tools/luminous_halt.sh の書き換えを止める" || ng "guard-protected: halt スクリプト"
+[ "$(gp "printf '* -diff\n' > .gitattributes")" = 2 ] && ok "guard-protected: .gitattributes の書き換えを止める（-diff で鍵の検査を外させない）" || ng "guard-protected: .gitattributes"
 [ "$(gp "bash tools/luminous_halt.sh on")" = 0 ] && ok "guard-protected: 全体停止の on は通す（誰でも付けられる）" || ng "guard-protected: on"
 [ "$(gp "bash tools/luminous_halt.sh on 試験の理由 2>&1")" = 0 ] && ok "guard-protected: on 理由 2>&1 も通す" || ng "guard-protected: on 2>&1"
 [ "$(gp 'bash tools/luminous_halt.sh on "誤って rm を実行した"')" = 0 ] && ok "guard-protected: 理由に rm が入っていても on は通す" || ng "guard-protected: on 理由 rm"
@@ -304,7 +319,14 @@ OUT="$(printf '%s' '{"session_id":"test-3","stop_hook_active":false}' | bash "$R
 # session-end: 全体停止中は docx 再生成を見送る
 rm -f "$R/state/.session-end.log"; bash "$R/.claude/hooks/session-end.sh" >/dev/null 2>&1
 grep -q '全体停止中のため docx 再生成を見送り' "$R/state/.session-end.log" 2>/dev/null && ok "session-end: 全体停止中は docx 再生成を見送る（理由も正しい）" || ng "session-end: 全体停止中の見送り"
+# session-end: 全体停止中は Obsidian 同期も見送る（停止の原因かもしれない中身を vault へ広げない）。見送りの文に「失敗」を入れない（次回の SessionStart が誤って警告する）
+VH="$T/vaulthalt"; mkdir -p "$VH/.obsidian"
+rm -f "$R/state/.session-end.log"; LUMINOUS_OBSIDIAN_DIR="$VH" bash "$R/.claude/hooks/session-end.sh" >/dev/null 2>&1
+[ ! -e "$VH/ルミナス" ] && grep -q '全体停止中のため Obsidian 同期を見送り' "$R/state/.session-end.log" 2>/dev/null && ! grep -q '失敗' "$R/state/.session-end.log" \
+  && ok "session-end: 全体停止中は Obsidian 同期も見送る（vault へ書かない・「失敗」と書かない）" || ng "session-end: 全体停止中に vault へ同期した"
 rm -f "$HALT"
+LUMINOUS_OBSIDIAN_DIR="$VH" bash "$R/.claude/hooks/session-end.sh" >/dev/null 2>&1
+[ -f "$VH/ルミナス/ルミナス.md" ] && ok "session-end: 印を消せば Obsidian 同期を行う" || ng "session-end: 印なしで同期されない"
 OUT="$(printf '%s' "$SID3" | bash "$R/.claude/hooks/restore-charter.sh")"
 printf '%s' "$OUT" | grep -q '全体停止中' && ng "restore: 印なしで停止の表示が出る" || ok "restore: 印なしでは停止の表示を出さない"
 
@@ -363,6 +385,149 @@ printf '2026-10-10T00:00:00Z 試験の理由\n' > "$HALT"
 [ "$(mj Bash ls | mh "$HG")" = 2 ] && ok "mac: halt-guard は印があれば Bash を止める" || ng "mac: halt-guard Bash"
 [ "$(printf '%s' '{"tool_name":"Read"}' | mh "$HG")" = 2 ] && ok "mac: halt-guard は印があり解析できなければ読む道具でも止める" || ng "mac: halt-guard Read"
 rm -f "$HALT"
+
+# 16) stop-gate: Codex の実行中は催促しない（codex-lock-guard が記録の Edit を止め、Bash で書けば範囲検査の違反になる）。終われば催促する
+date +%s > "$R/state/.sessions/test-g.start"   # 記録 3 件はこれより前に書いた（間に sleep がある）
+SG_M='{"session_id":"test-g","stop_hook_active":false}'
+printf '%s' "$SG_M" | bash "$R/.claude/hooks/stop-gate.sh" | grep -q '"block"' && ok "stop-gate: （前提）未更新ならブロック" || ng "stop-gate: 前提のブロック"
+mkdir -p "$R/data/codex_runs/.lock"; echo "$$ 0" > "$R/data/codex_runs/.lock/owner"
+OUT="$(printf '%s' "$SG_M" | bash "$R/.claude/hooks/stop-gate.sh")"
+[ -z "$OUT" ] && ok "stop-gate: Codex の実行中は催促しない（書けないものを求めない）" || ng "stop-gate: Codex の実行中に催促した"
+echo "$DEAD 0" > "$R/data/codex_runs/.lock/owner"
+printf '%s' "$SG_M" | bash "$R/.claude/hooks/stop-gate.sh" | grep -q '"block"' && ok "stop-gate: 持ち主が死んだロックでは催促する" || ng "stop-gate: 死んだロックで催促しない"
+rm -rf "$R/data/codex_runs/.lock"
+printf '%s' "$SG_M" | bash "$R/.claude/hooks/stop-gate.sh" | grep -q '"block"' && ok "stop-gate: Codex が終われば催促する" || ng "stop-gate: 終了後に催促しない"
+
+mkdir -p "$R/data/codex_runs/.lock"; echo "0 0" > "$R/data/codex_runs/.lock/owner"
+OUT="$(printf '%s' '{"session_id":"test-g","stop_hook_active":false}' | bash "$R/.claude/hooks/stop-gate.sh" 2>/dev/null)"
+printf '%s' "$OUT" | grep -q '"decision"' && ok "stop-gate: 持ち主の PID が 0（kill -0 が通る）でも素通りしない" || ng "stop-gate: PID 0 で素通り"
+rm -rf "$R/data/codex_runs/.lock"
+
+# 17) restore: 圧縮（compact）では開始時刻を上書きしない（それまでに書いた記録を「開始前」にしない）。source を読めなければ従来どおり上書き
+SM="$R/state/.sessions/test-c.start"; rm -f "$SM"
+rc_src() { printf '{"session_id":"test-c","source":"%s"}' "$1" | bash "$R/.claude/hooks/restore-charter.sh" >/dev/null 2>&1; }
+rc_src compact; [ -f "$SM" ] && ok "restore: compact でも開始の印が無ければ作る" || ng "restore: compact で印を作らない"
+echo 12345 > "$SM"; rc_src compact
+[ "$(cat "$SM")" = 12345 ] && ok "restore: compact では開始時刻を上書きしない（Stop ゲートの基準を保つ）" || ng "restore: compact で上書きした"
+rc_src resume
+[ "$(cat "$SM")" != 12345 ] && ok "restore: resume では開始時刻を上書きする" || ng "restore: resume で上書きしない"
+echo 12345 > "$SM"; rc_src startup
+[ "$(cat "$SM")" != 12345 ] && ok "restore: startup では開始時刻を上書きする" || ng "restore: startup で上書きしない"
+SMN="$R/state/.sessions/nosession.start"; echo 12345 > "$SMN"   # 解析できないと session_id も読めず nosession になる
+printf '%s' '{"session_id":"test-c","source":"compact"}' | PATH="$MB" "$MB/bash" "$R/.claude/hooks/restore-charter.sh" >/dev/null 2>&1
+[ "$(cat "$SMN")" != 12345 ] && ok "mac: source を読めない（jq も動く python3 も無い）ときは従来どおり上書きする" || ng "mac: source を読めないのに上書きしない"
+
+# 18) session-end: 最終プロンプトの md が変わったときだけ docx を作り直す（docx は作るたびに時刻が入ってバイト列が変わり、追跡中の docx を汚して
+#     codex_impl.sh の「未コミットの変更」で止まるため）。docx が今の md から作ったものだと確かめられなければ従来どおり作り直す
+D="$T/docx"; mkdir -p "$D/state" "$D/prompts" "$D/.claude"; cp -R "$HERE/.claude/hooks" "$D/.claude/"; cp -R "$HERE/scripts" "$D/"; cp "$HERE/prompts/ルミナス_最終プロンプト.md" "$D/prompts/"; printf 'state/\ndata/\n' > "$D/.gitignore"
+DX="$D/☆ルミナス_最終プロンプト.docx"; MDF="$D/prompts/ルミナス_最終プロンプト.md"; DXSRC="$D/state/.sessions/docx.src"
+FN="$T/fakenode"; mkdir -p "$FN"
+cat > "$FN/node" <<'NODE'
+#!/bin/sh
+# 偽の node（scripts/build-final-prompt-docx.mjs の代わり）: 作るたびにバイト列が変わる docx を書く（本物も作るたびに時刻が入る）
+printf 'docx %s %s\n' "$(date +%s)" "$$" > "☆ルミナス_最終プロンプト.docx"
+NODE
+chmod +x "$FN/node"
+gd() { git -C "$D" -c user.email=t@t -c user.name=t -c core.hooksPath=/dev/null "$@"; }
+se() { CLAUDE_PROJECT_DIR="$D" PATH="$FN:$PATH" bash "$D/.claude/hooks/session-end.sh" </dev/null >/dev/null 2>&1; }
+dsum() { cksum < "$DX" 2>/dev/null; }
+git -C "$D" init -q; gd add -A; gd commit -q -m init
+se; [ -f "$DX" ] && [ -s "$DXSRC" ] && ok "session-end: docx がまだコミットされていなければ作り、作ったときの md を記録する" || ng "session-end: 初回の docx"
+gd add -A; gd commit -q -m docx
+D0="$(dsum)"; se
+[ "$(dsum)" = "$D0" ] && [ -z "$(gd status --porcelain)" ] && grep -q '最終プロンプトに変更なし（docx 再生成を省略）' "$D/state/.session-end.log" \
+  && ok "session-end: md が変わっていなければ docx を作り直さない（バイト列も git status も変わらない）" || ng "session-end: md 未変更で docx を作り直した"
+printf '\n- 試験の追記\n' >> "$MDF"; D0="$(dsum)"; se
+[ "$(dsum)" != "$D0" ] && ok "session-end: md を作業ツリーで変えたら docx を作り直す" || ng "session-end: md の変更で作り直さない"
+gd checkout -q -- "☆ルミナス_最終プロンプト.docx"; gd add -A; gd commit -q -m md
+D0="$(dsum)"; se
+[ "$(dsum)" != "$D0" ] && ok "session-end: md が docx の後にコミットされたら作り直す" || ng "session-end: md が後のコミットで作り直さない"
+gd add -A; gd commit -q -m docx2; D0="$(dsum)"; se
+[ "$(dsum)" = "$D0" ] && ok "session-end: 作り直した docx をコミットした後は作り直さない" || ng "session-end: コミット後も作り直した"
+printf -- '- 二つ目\n' >> "$MDF"; se; gd add -A; gd commit -q -m both; D0="$(dsum)"; se
+[ "$(dsum)" != "$D0" ] && ok "session-end: md と docx が同じコミットで変わったら作り直す（どの md から作ったか分からない）" || ng "session-end: 同じコミットで作り直さない"
+gd add -A; gd commit -q -m docx3; D0="$(dsum)"; se
+[ "$(dsum)" = "$D0" ] && ok "session-end: （前提）docx を別にコミットすれば作り直さない" || ng "session-end: 別コミット後に作り直した"
+echo "1 1" > "$DXSRC"; D0="$(dsum)"; se
+[ "$(dsum)" != "$D0" ] && [ "$(cat "$DXSRC")" = "$(cksum < "$MDF")" ] && ok "session-end: 前に作ったときの md が今と違えば作り直す（古い md の docx が md の後にコミットされたとき）" || ng "session-end: 記録の md の違いで作り直さない"
+gd add -A; gd commit -q -m docx4
+printf 'keep\n' > "$T/docxsrc-target"; rm -f "$DXSRC"; ln -s "$T/docxsrc-target" "$DXSRC"; D0="$(dsum)"; se
+[ "$(dsum)" != "$D0" ] && [ "$(cat "$T/docxsrc-target")" = keep ] && [ -f "$DXSRC" ] && [ ! -L "$DXSRC" ] && ok "session-end: 記録が記号リンクなら作り直し、リンクの先は書き換えない" || ng "session-end: 記号リンクの記録"
+gd add -A; gd commit -q -m docx5; D0="$(dsum)"; se
+[ "$(dsum)" = "$D0" ] && ok "session-end: （前提）記録を戻せば作り直さない" || ng "session-end: 記録を戻しても作り直した"
+mkdir -p "$D/data"; printf '日時: test\n' > "$D/data/.codex_violation"; D0="$(dsum)"; se
+[ "$(dsum)" = "$D0" ] && grep -q '違反の印・ロック・入れ子の .git があるため docx 再生成を見送り' "$D/state/.session-end.log" && ok "session-end: Codex の違反の印があれば node を動かさず見送る（未審査の中身を外で動かさない）" || ng "session-end: 違反の印で docx を作り直した"
+rm -f "$D/data/.codex_violation"; gd checkout -q -- "☆ルミナス_最終プロンプト.docx"
+mkdir -p "$D/sub/.git"; D0="$(dsum)"; se
+[ "$(dsum)" = "$D0" ] && ok "session-end: 入れ子の .git があれば node を動かさず見送る" || ng "session-end: 入れ子の .git で docx を作り直した"
+rm -rf "$D/sub"; gd checkout -q -- "☆ルミナス_最終プロンプト.docx"
+mkdir -p "$D/data/codex_runs/.lock"; echo "$$ 0" > "$D/data/codex_runs/.lock/owner"; D0="$(dsum)"; se
+[ "$(dsum)" = "$D0" ] && ok "session-end: Codex の実行中は（変更が無くても）作り直さない" || ng "session-end: Codex の実行中に作り直した"
+rm -rf "$D/data/codex_runs/.lock"
+
+# 19) restore: 前回の開始の後に、保護ファイルがコミット（pull・merge を含む）で変わったら警告する。この clone だけの記録（state/.sessions/、git 管理外）と比べる
+#     （クラウドでは hooks も確認のダイアログも効かないので、クラウドでコミットされた保護ファイルの変更は Mac の pull で黙って入る）
+O="$T/cloud"; mkdir -p "$O/.claude"; cp -R "$HERE/.claude/hooks" "$O/.claude/"; cp "$HERE/CHARTER.md" "$HERE/ROUTINE.md" "$O/"; printf 'state/\n' > "$O/.gitignore"
+gt() { local d="$1"; shift; git -C "$d" -c user.email=t@t -c user.name=t -c core.hooksPath=/dev/null "$@"; }
+git -C "$O" init -q; gt "$O" add -A; gt "$O" commit -q -m init
+M="$T/mac"; git clone -q "$O" "$M" 2>/dev/null
+PL="$M/state/.sessions/protected.last"
+mr() { printf '%s' '{"session_id":"test-p","source":"startup"}' | CLAUDE_PROJECT_DIR="$M" bash "$M/.claude/hooks/restore-charter.sh" 2>/dev/null; }
+WARN27='保護ファイルがコミットで変わりました'
+OUT="$(mr)"
+printf '%s' "$OUT" | grep -q '基準をこの clone に記録しました' && ! printf '%s' "$OUT" | grep -q "$WARN27" && grep -qE '^[0-9a-f]{40,64}$' "$PL" \
+  && ok "restore: 初回は保護ファイルの基準を記録するだけ（警告しない）" || ng "restore: 初回の基準"
+printf '\n- 試験の追記（クラウド）\n' >> "$O/CHARTER.md"; gt "$O" commit -qam cloud; gt "$M" pull -q --ff-only
+OUT="$(mr)"
+printf '%s' "$OUT" | grep -q "$WARN27" && printf '%s' "$OUT" | grep -q 'CHARTER.md' && ok "restore: pull で入った保護ファイルの変更を警告し、ファイルを示す" || ng "restore: pull で入った保護ファイルの変更を警告しない"
+OUT="$(mr)"
+printf '%s' "$OUT" | grep -q "$WARN27" && ng "restore: 一度知らせた変更を繰り返し警告した" || ok "restore: 一度知らせた変更は次の開始で繰り返さない"
+printf 'x\n' > "$O/notes.txt"; gt "$O" add notes.txt; gt "$O" commit -q -m notes; gt "$M" pull -q --ff-only
+OUT="$(mr)"
+printf '%s' "$OUT" | grep -q "$WARN27" && ng "restore: 保護ファイル以外のコミットで警告した" || ok "restore: 保護ファイル以外のコミットでは警告しない"
+printf 'local\n' > "$M/local.txt"; gt "$M" add local.txt; gt "$M" commit -q -m local
+printf '\n- merge の試験\n' >> "$O/ROUTINE.md"; gt "$O" commit -qam cloud2; gt "$M" -c pull.rebase=false pull -q --no-edit >/dev/null 2>&1
+OUT="$(mr)"
+printf '%s' "$OUT" | grep -q "$WARN27" && printf '%s' "$OUT" | grep -q 'ROUTINE.md' && ok "restore: merge で入った保護ファイルの変更も警告する" || ng "restore: merge で入った変更を警告しない"
+printf -- '--output=%s\n' "$T/pwned27" > "$PL"; printf '\n- 注入の試験\n' >> "$O/CHARTER.md"; gt "$O" commit -qam cloud3; gt "$M" -c pull.rebase=false pull -q --no-edit >/dev/null 2>&1
+OUT="$(mr)"
+[ ! -e "$T/pwned27" ] && ! printf '%s' "$OUT" | grep -q "$WARN27" && grep -qE '^[0-9a-f]{40,64}$' "$PL" && ok "restore: 記録に書かれた git の引数（--output=…）は使わず、基準を記録し直す" || ng "restore: 記録の引数の注入"
+printf 'keep\n' > "$T/pl-target"; rm -f "$PL"; ln -s "$T/pl-target" "$PL"; mr >/dev/null
+[ "$(cat "$T/pl-target")" = keep ] && [ -f "$PL" ] && [ ! -L "$PL" ] && ok "restore: 記録が記号リンクでも先を書き換えない" || ng "restore: 記号リンクの先を書き換えた"
+cp "$PL" "$T/pl-before"; printf '\n- 無人の試験\n' >> "$O/CHARTER.md"; gt "$O" commit -qam cloud4; gt "$M" -c pull.rebase=false pull -q --no-edit >/dev/null 2>&1
+OUT="$(printf '%s' '{"session_id":"test-p","source":"startup"}' | FABLE5_HEADLESS=1 CLAUDE_PROJECT_DIR="$M" bash "$M/.claude/hooks/restore-charter.sh" 2>/dev/null)"
+printf '%s' "$OUT" | grep -q "$WARN27" && cmp -s "$PL" "$T/pl-before" && ok "restore: 無人実行では警告しても記録を進めない" || ng "restore: 無人実行で記録を進めた"
+mr | grep -q "$WARN27" && ok "restore: 無人実行の後の開始でも警告する（人が見る）" || ng "restore: 無人実行で警告を使い切った"
+
+# 記録がフォルダ（またはリンク）だと書けない: 「記録しました」と言わず、確かめられないと警告する（黙って検知が止まらない）
+rm -f "$PL"; mkdir -p "$PL"; OUT="$(mr)"
+printf '%s' "$OUT" | grep -q '通常のファイルではないため' && printf '%s' "$OUT" | grep -q '基準を記録できませんでした' && ! printf '%s' "$OUT" | grep -q '基準をこの clone に記録しました' \
+  && ok "restore: 記録がフォルダなら「記録しました」と言わず警告する" || ng "restore: フォルダの記録"
+rmdir "$PL"; mr >/dev/null
+
+# 20) session-end: 最終プロンプトの docx を LUMINOUS_PRIVATE_DIR（非公開フォルダ）にも写す（Mark の依頼 2026-10-11）。中身が違うときだけ。危ない置き場には書かない
+P20="$T/priv20"; mkdir -p "$P20"; DXP="$P20/☆ルミナス_最終プロンプト.docx"
+sep() { CLAUDE_PROJECT_DIR="$D" PATH="$FN:$PATH" LUMINOUS_PRIVATE_DIR="$1" bash "$D/.claude/hooks/session-end.sh" </dev/null >/dev/null 2>&1; }
+sep "$P20"; cmp -s "$DX" "$DXP" && grep -q '非公開フォルダへ写しました' "$D/state/.session-end.log" && ok "session-end: docx を非公開フォルダへ写す" || ng "session-end: 非公開フォルダへの写し"
+touch -t 202001010000 "$DXP"; sep "$P20"; [ "$(find "$DXP" -newer "$DX" | wc -l | tr -d ' ')" = 0 ] && cmp -s "$DX" "$DXP" && ok "session-end: 中身が同じなら写し直さない" || ng "session-end: 同じ中身で写し直した"
+printf 'old\n' > "$DXP"; sep "$P20"; cmp -s "$DX" "$DXP" && ok "session-end: 写しが古ければ写し直す" || ng "session-end: 古い写しを直さない"
+rm -f "$DXP"; printf 'victim\n' > "$T/victim20"; ln -s "$T/victim20" "$DXP"; sep "$P20"
+[ "$(cat "$T/victim20")" = victim ] && [ -L "$DXP" ] && grep -q 'docx の写し 失敗（写し先が通常のファイルではない）' "$D/state/.session-end.log" && ok "session-end: 写し先がリンクなら書かない（リンクの先を上書きしない）" || ng "session-end: リンクの写し先"
+rm -f "$DXP"
+mkdir -p "$D/privin"; sep "$D/privin"; [ ! -e "$D/privin/☆ルミナス_最終プロンプト.docx" ] && ok "session-end: このフォルダの中の置き場には写さない" || ng "session-end: フォルダの中へ写した"
+sep "rel/priv"; [ ! -e "$D/rel/priv/☆ルミナス_最終プロンプト.docx" ] && grep -q 'docx の写し 失敗（LUMINOUS_PRIVATE_DIR が絶対パスではない' "$D/state/.session-end.log" && ok "session-end: 相対パス（~ を含む）の置き場には写さず「失敗」と書く" || ng "session-end: 相対パス"
+sep "$T/nope20"; [ ! -e "$T/nope20" ] && grep -q 'docx の写し 失敗（LUMINOUS_PRIVATE_DIR のフォルダが無い）' "$D/state/.session-end.log" && ok "session-end: 無いフォルダは作らず「失敗」と書く" || ng "session-end: 無いフォルダ"
+grep -q 'docx の写し 失敗（LUMINOUS_PRIVATE_DIR がこのフォルダの中）' "$D/state/.session-end.log" && ok "session-end: このフォルダの中の置き場は「失敗」と書く" || ng "session-end: フォルダの中の失敗の表示"
+! grep -q "$P20" "$D/state/.session-end.log" && ok "session-end: ログに置き場のパスを書かない" || ng "session-end: ログにパス"
+rm -f "$DXP"; mkdir -p "$D/data/codex_runs/.lock"; echo "$$ 0" > "$D/data/codex_runs/.lock/owner"; sep "$P20"
+[ ! -e "$DXP" ] && ok "session-end: Codex の実行中は非公開フォルダへ写さない" || ng "session-end: 実行中に写した"
+rm -rf "$D/data/codex_runs/.lock"; printf '日時: test\n' > "$D/data/.codex_violation"; sep "$P20"
+[ ! -e "$DXP" ] && ok "session-end: Codex の違反が未処理なら非公開フォルダへ写さない" || ng "session-end: 違反の印で写した"
+rm -f "$D/data/.codex_violation"
+ls -a "$P20" | grep -q '^\.luminous-docx\.' && ng "session-end: 一時ファイルが残った" || ok "session-end: 一時ファイルを残さない"
+printf '2026-10-11T00:00:00Z 試験\n' > "$D/data/.luminous_halt" 2>/dev/null || { mkdir -p "$D/data"; printf '2026-10-11T00:00:00Z 試験\n' > "$D/data/.luminous_halt"; }
+sep "$P20"; [ ! -e "$DXP" ] && ok "session-end: 全体停止中は非公開フォルダへ写さない" || ng "session-end: 停止中に写した"
+rm -f "$D/data/.luminous_halt"
 
 echo "---- $pass passed, $fail failed"
 [ "$fail" = 0 ]

@@ -64,6 +64,14 @@ make_safe_dir() {
   mktemp -d "$real/run.XXXXXX"
 }
 remove_safe_dir() { case "$1" in */luminous-codex*/run.*|*/run.??????) rm -rf -- "$1";; esac; }
+# 安全な置き場の全体停止の記録（halt.<番号>.log）の名前に使う、根のフォルダの番号（inode）。記録をルミナスのフォルダごとに分け、
+# 同じ機械の別のフォルダの on を「Codex が消した疑い」にしない。パスの綴り（大文字小文字・NFC/NFD）に左右されない
+# （別のボリュームで番号が重なれば記録を共有する＝従来の止める側の動き）。
+# luminous_halt.sh と同じ式（tests が一致を確かめる）
+halt_fid() { local i; i="$(ls -di "$PROJ_REAL" 2>/dev/null | awk 'NR==1{print $1}')"; case "$i" in ''|*[!0-9]*) i=0;; esac; printf '%s\n' "$i"; }
+# 作ったフォルダ（data/・data/codex_runs/・実行の記録）を本人だけが読めるようにする（Codex の出力の写しを他の利用者に読ませない）。
+# umask は変えない（Codex が作るファイルの権限を変えないため）。リンクとフォルダでないものは触らない（chmod はリンク先をたどるため）。失敗しても止めない
+private_dir() { local d; for d in "$@"; do [ -d "$d" ] && [ ! -L "$d" ] && chmod 700 "$d" 2>/dev/null; done; return 0; }
 
 # 同時に2本以上走らせない（ディレクトリ作成は原子的）。持ち主のプロセスが死んでいるか、PID が別のプロセスに使い回されて
 # いると確かめられたときだけ回収する（時間では回収しない。長い実行のロックを奪うと2本が同時に走るため）。持ち主の記録が無いロックも回収しない
@@ -98,7 +106,7 @@ lock_owner_alive() {  # $1=PID $2=記録の時刻
   return 0
 }
 acquire_lock() {
-  mkdir -p "$PROJ/data/codex_runs"
+  mkdir -p "$PROJ/data/codex_runs"; private_dir "$PROJ/data" "$PROJ/data/codex_runs"
   if mkdir "$LOCK_DIR" 2>/dev/null; then _write_owner; return 0; fi
   local pid stale; pid="$(lock_owner)"
   if [ -z "$pid" ]; then

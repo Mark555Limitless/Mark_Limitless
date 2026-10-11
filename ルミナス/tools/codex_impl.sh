@@ -47,6 +47,7 @@ main() {
   case "$NG" in
     0) ;;
     3) echo "codex_impl: 作業フォルダ内に .git があります。git コマンドを使わずに中身を確かめ、作業フォルダの外へ移してから実行してください" >&2; return 2;;
+    1) echo "codex_impl: .git の点検を実行できませんでした（終了 1）。上の scope_check の表示が「読めないフォルダ」なら、そのフォルダの権限を直すか作業フォルダの外へ移してから実行してください。それ以外なら python3（${SAFE_PY}）が動くか確かめてください" >&2; return 2;;
     *) echo "codex_impl: .git の点検を実行できませんでした（終了 $NG: ${SAFE_PY}）。python3 が動くか確かめてください（Mac では xcode-select --install）" >&2; return 2;;
   esac
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "codex_impl: git リポジトリではありません（git init が必要）" >&2; return 2; }
@@ -69,8 +70,9 @@ main() {
   SPEC_SUM="$("${SC[@]}" fsum "$SPEC")"; ENV_SUM="$("${SC[@]}" fsum .env)"
   START_HEAD="$(sgit rev-parse HEAD)"; GITFP="$("${SC[@]}" gitfp "$LUM_GITDIR")"
   "${SC[@]}" snapshot "$PROJ" "$LUM_SAFE/before.json" "${RG[@]}" || return 2
-  # 全体停止の on の記録（Codex が書けない置き場の halt.log）の大きさを控える。実行中に on されたのに検査の時点で印が無ければ、Codex が消した疑い
-  local HLOG="${LUM_SAFE%/*}/halt.log" HLOG_N0; HLOG_N0="$({ wc -c < "$HLOG"; } 2>/dev/null | tr -d ' ')"; : "${HLOG_N0:=0}"
+  # 全体停止の on の記録（Codex が書けない置き場の、このフォルダの halt.<番号>.log）の大きさを控える。実行中に on されたのに検査の時点で印が無ければ、Codex が消した疑い
+  # （記録はフォルダごと: 同じ機械の別のルミナスのフォルダの on は見ない。名前は luminous_halt.sh と同じ halt_fid）
+  local HLOG="${LUM_SAFE%/*}/halt.$(halt_fid).log" HLOG_N0; HLOG_N0="$({ wc -c < "$HLOG"; } 2>/dev/null | tr -d ' ')"; : "${HLOG_N0:=0}"
   [ "$LUM_HALTED" = 1 ] && { echo "codex_impl: 開始前に全体停止になりました（data/.luminous_halt）" >&2; return 7; }
   [ "$LUM_INTERRUPTED" = 1 ] && { echo "codex_impl: 開始前に中断しました" >&2; return 130; }
 
@@ -128,7 +130,7 @@ main() {
   if [ "$HLAST" = on ] && ! halted; then
     echo "codex_impl: 実行中に全体停止の印が付けられた記録があるのに、検査の時点で印が無い（Codex が消した疑い）。印を作り直します" >&2; VIOL=1; LUM_HALTED=1
     ( set -C; printf '%s 再作成（Codex が消した疑い）\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > data/.luminous_halt ) 2>/dev/null   # noclobber: symlink を置かれても他を上書きしない
-    [ "$(uname -s)" = Darwin ] && chflags uchg data/.luminous_halt 2>/dev/null
+    [ "$(uname -s)" = Darwin ] && chflags -h uchg data/.luminous_halt 2>/dev/null   # -h: リンクならリンク自身に付ける（リンク先を変えない）
     halted || echo "codex_impl: 印を作り直せませんでした。Mark が bash tools/luminous_halt.sh on を実行してください" >&2
   fi
   if [ "$("${SC[@]}" gitfp "$LUM_GITDIR")" != "$GITFP" ]; then
@@ -154,7 +156,7 @@ main() {
   clean_artifacts
 
   local RUNDIR="$PROJ/data/codex_runs/$STAMP-$SPEC_NAME"
-  mkdir -p "$RUNDIR" && cp "$LUM_SAFE"/*.log "$LUM_SAFE/allowed.txt" "$RUNDIR/" 2>/dev/null; cp "$LUM_SAFE/last_message.md" "$RUNDIR/" 2>/dev/null
+  mkdir -p "$RUNDIR" && private_dir "$RUNDIR" && cp "$LUM_SAFE"/*.log "$LUM_SAFE/allowed.txt" "$RUNDIR/" 2>/dev/null; cp "$LUM_SAFE/last_message.md" "$RUNDIR/" 2>/dev/null
   local STATUS=ok CODE=0
   if [ "$VIOL" = 1 ]; then STATUS=error; CODE=3
   elif [ "$LUM_HALTED" = 1 ]; then STATUS=error; CODE=7

@@ -87,6 +87,11 @@ case "$FAKE_MODE" in
   edited_content) mkdir -p state/.sessions && echo payload > state/.sessions/x.edited ;;
   lock_content) echo payload >> data/usage.lock ;;
   escalations) mkdir -p state && printf 'x | %s\n' "$FAKE_MARK" >> state/escalations.log && echo "VERSION_INFO = 5" >> orch/__init__.py ;;
+  unreadable) mkdir -p hid/sub/.git && printf '%s\n' "$FAKE_MARK" > hid/leak.md && echo "ref: refs/heads/main" > hid/sub/.git/HEAD && chmod 000 hid ;;
+  xonly) mkdir -p xo && echo "import os" > xo/payload.py && chmod 111 xo ;;
+  unreadable_fail) mkdir -p hid && echo x > hid/payload.py && chmod 000 hid; exit 1 ;;
+  umask) umask > "$FAKE_LOG.umask"; echo "VERSION_INFO = 9" >> orch/__init__.py ;;
+  nap) sleep "${FAKE_NAP:-3}"; echo "VERSION_INFO = 10" >> orch/__init__.py ;;
 esac
 [ -n "$out" ] && echo "変更しました" > "$out"
 exit 0
@@ -650,7 +655,8 @@ def _halt_cmd(proj, *args, stdin=subprocess.DEVNULL):
 
 
 def _safe_halt_log(proj):
-    return proj[3] / "luminous-codex" / "halt.log"
+    """安全な置き場の全体停止の記録。ルミナスのフォルダごとに分け、名前は根のフォルダの番号（inode。halt_fid）"""
+    return proj[3] / "luminous-codex" / f"halt.{os.stat(os.path.realpath(proj[0])).st_ino}.log"
 
 
 def _wait_launch(proj, timeout=30):
@@ -1041,3 +1047,308 @@ def test_halt_marker_is_uchg_on_mac_and_teardown_unlocks(proj, tmp_path):
     assert os.lstat(_halt_path(proj)).st_flags & stat.UF_IMMUTABLE
     _unlock_flags(tmp_path)
     assert not os.lstat(_halt_path(proj)).st_flags & stat.UF_IMMUTABLE
+
+
+# ---- Mac 切替の監査の残り（読めないフォルダ・安全な置き場の記録のフォルダごとの分離・chflags -h・記録のフォルダの権限）----
+def _load_scope_check():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sc_walk", ROOT / "tools" / "scope_check.py")
+    sc = importlib.util.module_from_spec(spec); spec.loader.exec_module(sc)
+    return sc
+
+
+def _fault_scandir(monkeypatch, name, exc):
+    """os.walk が name のフォルダを開くときに exc を出す（root は権限を無視して読めるので、chmod 000 の代わりに差し替えで模す）"""
+    real = os.scandir
+
+    def fake(path="."):
+        if os.path.basename(os.fspath(path)) == name:
+            raise exc(errno.EACCES if exc is PermissionError else errno.ENOENT, "模した失敗", os.fspath(path))
+        return real(path)
+    monkeypatch.setattr(os, "scandir", fake)
+
+
+def test_scope_check_walk_stops_on_unreadable_dir(tmp_path, monkeypatch):
+    """読めないフォルダを黙って飛ばさない: 実行の前から読めない・Codex が作って 000 にしたフォルダの中を OK のまま見落とさない"""
+    sc = _load_scope_check()
+    (tmp_path / "ok").mkdir()
+    (tmp_path / "ok" / "a.txt").write_text("a\n", encoding="utf-8")
+    (tmp_path / "locked" / "sub").mkdir(parents=True)
+    (tmp_path / "locked" / "leak.md").write_text(MARK + "\n", encoding="utf-8")
+    assert "locked/leak.md" in sc.snapshot(str(tmp_path))["files"]  # 陰性の対照: 読めれば中まで記録する
+    _fault_scandir(monkeypatch, "locked", PermissionError)
+    for fn in (sc.snapshot, sc.find_git, sc.nested_git_now):
+        with pytest.raises(sc.UnreadableDir, match="読めないフォルダ") as ei:
+            fn(str(tmp_path))
+        assert "locked" in str(ei.value) and str(tmp_path) not in str(ei.value)  # 表示は根からの相対（ローカルの絶対パスを記録に残さない）
+
+
+def test_scope_check_walk_ignores_dir_vanished_during_scan(tmp_path, monkeypatch):
+    """走査中に消えたフォルダ（FileNotFoundError）だけは無視する（中のファイルは削除として検出される）"""
+    sc = _load_scope_check()
+    (tmp_path / "keep").mkdir()
+    (tmp_path / "keep" / "k.txt").write_text("k\n", encoding="utf-8")
+    (tmp_path / "gone").mkdir()
+    (tmp_path / "gone" / "g.txt").write_text("g\n", encoding="utf-8")
+    before = sc.snapshot(str(tmp_path))
+    _fault_scandir(monkeypatch, "gone", FileNotFoundError)
+    after = sc.snapshot(str(tmp_path))
+    assert "keep/k.txt" in after["files"] and "gone/g.txt" not in after["files"]
+    assert "gone/g.txt" in sc.changes(before, after)  # 消えた中身は変更（削除）として出る
+    assert sc.find_git(str(tmp_path)) == []
+
+
+def _nocap(cmd):
+    """本当に読めないフォルダで試す。root は権限を無視して読めるので、Linux では setpriv で特権を外して走らせる
+    （所有者の権限どおりになる）。root でなければ（Mac）そのまま。どちらもできなければ skip"""
+    if os.geteuid() != 0:
+        return list(cmd)
+    sp = shutil.which("setpriv")
+    if not sp:
+        pytest.skip("root で、特権を外す setpriv が無い（読めないフォルダを作れない）")
+    if subprocess.run([sp, "--bounding-set=-all", "--inh-caps=-all", "true"], capture_output=True).returncode != 0:
+        pytest.skip("setpriv で特権を外せない（コンテナの制限など）")   # setpriv そのものの失敗を「読めない」と取り違えない
+    probe = Path(tempfile.mkdtemp(prefix="luminous-nocap-"))
+    try:
+        probe.chmod(0o000)
+        r = subprocess.run([sp, "--bounding-set=-all", "--inh-caps=-all", "ls", str(probe)], capture_output=True)
+        if r.returncode == 0:
+            pytest.skip("setpriv で特権を外しても 000 のフォルダを読めてしまう")
+    finally:
+        probe.chmod(0o700); probe.rmdir()
+    return [sp, "--bounding-set=-all", "--inh-caps=-all", *cmd]
+
+
+@pytest.mark.parametrize("script,args", [("codex_impl.sh", ("docs/specs/s.md", "low")),
+                                         ("codex_opinion.sh", ("docs/astra-packets/p.md",))])
+def test_unreadable_dir_before_run_stops_wrappers(proj, script, args):
+    """実行の前から読めないフォルダがある: .git の点検が「点検できなかった」で止まり（2）、Codex を起動しない"""
+    p = proj[0]
+    locked = p / "locked"
+    locked.mkdir()
+    (locked / "old.txt").write_text("old\n", encoding="utf-8")
+    locked.chmod(0o000)
+    try:
+        r = subprocess.run(_nocap([BASH, f"tools/{script}", *args]), cwd=p, env=env_for(proj, "allowed"),
+                           capture_output=True, text=True, timeout=120)
+    finally:
+        locked.chmod(0o755)
+    assert r.returncode == 2 and "読めないフォルダ" in r.stderr and "点検を実行できませんでした" in r.stderr, (r.stdout, r.stderr)
+    assert calls(proj) == [] and not (p / "data" / "codex_runs" / ".lock").exists()
+
+
+@pytest.mark.parametrize("mode,code", [("unreadable", 3), ("xonly", 3), ("allowed", 0)])
+def test_codex_made_unreadable_dir_is_violation(proj, mode, code):
+    """Codex が作って 000（中に非公開の印と入れ子の .git）や 111（名前を知っていれば読める）にしたフォルダは、
+    検査器が読めずに止まり、ラッパーは違反（3）にする。allowed は同じ権限の条件での陰性の対照（0）"""
+    p = proj[0]
+    try:
+        r = subprocess.run(_nocap([BASH, "tools/codex_impl.sh", "docs/specs/s.md", "low"]), cwd=p, env=env_for(proj, mode),
+                           capture_output=True, text=True, timeout=120)
+    finally:
+        for d in ("hid", "xo"):
+            if (p / d).is_dir() and not (p / d).is_symlink():
+                (p / d).chmod(0o755)
+    assert r.returncode == code, (r.stdout, r.stderr)
+    assert (p / "data" / ".codex_violation").exists() == (code == 3)
+    if code == 3:
+        assert "読めないフォルダ" in r.stderr and "HEAD の確認を省きました" in r.stderr, r.stderr  # 隔離を確かめられないので git を使わない
+
+
+def test_codex_failed_with_unreadable_dir_is_not_retried(proj):
+    """失敗した Codex が読めないフォルダを残した: 変更の件数を数えられないので「無変更」とみなさず、別のモデルでやり直さない（違反 3）"""
+    p = proj[0]
+    try:
+        r = subprocess.run(_nocap([BASH, "tools/codex_impl.sh", "docs/specs/s.md", "low"]), cwd=p,
+                           env=env_for(proj, "unreadable_fail", {"CODEX_FALLBACK_MODEL": "gpt-5.6-sol"}),
+                           capture_output=True, text=True, timeout=120)
+    finally:
+        if (p / "hid").is_dir():
+            (p / "hid").chmod(0o755)
+    assert r.returncode == 3 and len(calls(proj)) == 1 and "やり直します" not in r.stderr, (r.stdout, r.stderr)
+
+
+def test_halt_fid_is_the_same_expression_in_halt_script_and_wrapper():
+    """安全な置き場の記録の名前（halt_fid）は、luminous_halt.sh と codex_impl.sh（_codex_common.sh）で同じ式"""
+    def line(name):
+        return next(l for l in (ROOT / "tools" / name).read_text(encoding="utf-8").splitlines() if l.startswith("halt_fid() {"))
+    assert line("luminous_halt.sh") == line("_codex_common.sh")
+    assert "halt.$(halt_fid).log" in (ROOT / "tools" / "codex_impl.sh").read_text(encoding="utf-8")
+
+
+def test_halt_on_in_other_folder_does_not_make_innocent_run_a_violation(proj, tmp_path):
+    """同じ機械の別のルミナスのフォルダで on しても、こちらで実行中の無実の Codex を「消した疑い」にしない
+    （安全な置き場は同じ。記録はフォルダごと）。同じフォルダで印を消す Codex は従来どおり 3（test_halt_eraser_*）"""
+    p = proj[0]
+    other = _build(tmp_path / "other", parent=False)
+    shutil.rmtree(other[3], ignore_errors=True)
+    proc = subprocess.Popen([BASH, "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p,
+                            env=env_for(proj, "nap", {"FAKE_NAP": "3"}), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        _wait_launch(proj)
+        r = subprocess.run([BASH, "tools/luminous_halt.sh", "on", "別のフォルダで止める"], cwd=other[0], env=env_for(proj, "x"),
+                           capture_output=True, text=True, timeout=90)  # 安全な置き場（XDG_CACHE_HOME）はこちらと同じ
+        out, err = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        _unlock_flags(tmp_path)
+    assert r.returncode == 0 and (other[0] / "data" / ".luminous_halt").exists(), (r.stdout, r.stderr)
+    assert proc.returncode == 0 and "Codex が消した疑い" not in err, (out, err)
+    assert not (p / "data" / ".codex_violation").exists() and not _halt_path(proj).exists()  # 印も作り直さない
+    other_log = proj[3] / "luminous-codex" / f"halt.{os.stat(os.path.realpath(other[0])).st_ino}.log"
+    assert other_log.read_text(encoding="utf-8").count(" on ") == 1 and not _safe_halt_log(proj).exists()
+    assert not (proj[3] / "luminous-codex" / "halt.log").exists()  # 共有の 1 つの記録には書かない
+
+
+def test_halt_safe_log_name_is_the_same_via_symlinked_path(proj, tmp_path):
+    """リンクを通した別のパスで起動しても、同じフォルダなら同じ記録に書く（名前はフォルダの番号）"""
+    link = tmp_path / "link"
+    link.symlink_to(proj[0])
+    r = subprocess.run([BASH, "link/tools/luminous_halt.sh", "on", "リンク経由"], cwd=tmp_path, env=env_for(proj, "x"),
+                       capture_output=True, text=True, timeout=90)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert _safe_halt_log(proj).read_text(encoding="utf-8").count(" on ") == 1
+
+
+def _darwin_shim(tmp_path):
+    """uname -s が Darwin を返し、chflags が引数を記録するだけの shim（Linux で Mac の chflags の呼び方を確かめる）"""
+    d = tmp_path / "darwin"
+    d.mkdir()
+    (d / "uname").write_text("#!/bin/sh\necho Darwin\n", encoding="utf-8")
+    (d / "chflags").write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$CHFLAGS_LOG"\nexit 0\n', encoding="utf-8")
+    for f in ("uname", "chflags"):
+        (d / f).chmod(0o755)
+    return d, tmp_path / "chflags.log"
+
+
+def _darwin_env(proj, mode, shim, log, extra=None):
+    env = env_for(proj, mode, dict(extra or {}, CHFLAGS_LOG=str(log)))
+    env["PATH"] = f"{shim}{os.pathsep}{env['PATH']}"
+    return env
+
+
+def test_chflags_changes_the_link_itself_on_and_off(proj, tmp_path):
+    """Mac の chflags は -h が無いとリンク先の属性を変える。on の uchg も off の nouchg も -h を付けて、印そのものに対して行う"""
+    p = proj[0]
+    shim, log = _darwin_shim(tmp_path)
+    env = _darwin_env(proj, "x", shim, log)
+    r = subprocess.run([BASH, "tools/luminous_halt.sh", "on", "x"], cwd=p, env=env, capture_output=True, text=True, timeout=90)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    rc, out, err = run_tty([BASH, "tools/luminous_halt.sh", "off"], p, env, "解除\n")
+    assert rc == 0, (out, err)
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert [l.split(" ", 2)[:2] for l in lines] == [["-h", "uchg"], ["-h", "nouchg"]], lines
+    assert all(l.endswith("/data/.luminous_halt") for l in lines), lines
+
+
+def test_chflags_on_recreated_marker_by_wrapper_uses_h(proj, tmp_path):
+    """ラッパーが消された印を作り直したときの uchg も -h を付ける（印のリンクを置かれても、リンク先に付けない）"""
+    p = proj[0]
+    shim, log = _darwin_shim(tmp_path)
+    proc = subprocess.Popen([BASH, "tools/codex_impl.sh", "docs/specs/s.md", "low"], cwd=p,
+                            env=_darwin_env(proj, "halt_eraser", shim, log), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        _wait_launch(proj)
+        time.sleep(0.3)
+        _ = subprocess.run([BASH, "tools/luminous_halt.sh", "on", "消す Codex"], cwd=p, env=_darwin_env(proj, "x", shim, log),
+                           capture_output=True, text=True, timeout=90)
+        out, err = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 3 and "Codex が消した疑い" in err, (out, err)
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert "-h uchg data/.luminous_halt" in lines, lines  # ラッパーの作り直し
+    assert any(l.startswith("-h uchg ") and l.endswith(f"{os.sep}data{os.sep}.luminous_halt") and l != "-h uchg data/.luminous_halt"
+               for l in lines), lines  # luminous_halt.sh の on
+    assert all(l.split()[0] == "-h" for l in lines if l.split()[-2] == "uchg"), lines  # uchg はどれも -h つき（nouchg は偽の Codex）
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="chflags は Mac だけ")
+def test_halt_off_on_symlink_marker_keeps_target_flags_on_mac(proj, tmp_path):
+    """印がリンクでも、off の nouchg はリンク先（Mark のファイル）の uchg を外さない"""
+    p = proj[0]
+    victim = tmp_path / "victim"
+    victim.write_text("v\n", encoding="utf-8")
+    subprocess.run(["chflags", "uchg", str(victim)], check=True)
+    try:
+        (p / "data").mkdir(exist_ok=True)
+        os.symlink(victim, _halt_path(proj))
+        rc, out, err = run_tty([BASH, "tools/luminous_halt.sh", "off"], p, env_for(proj, "x"), "解除\n")
+        assert rc == 0 and not os.path.lexists(_halt_path(proj)), (out, err)
+        assert os.stat(victim).st_flags & stat.UF_IMMUTABLE
+    finally:
+        subprocess.run(["chflags", "nouchg", str(victim)], check=False)
+
+
+def _mode(path):
+    return stat.S_IMODE(os.lstat(path).st_mode)
+
+
+def test_codex_record_dirs_are_private_and_umask_is_kept(proj):
+    """data/・data/codex_runs/・実行の記録は 700（既にある 755 も直す）。Codex に渡す umask は変えない"""
+    p = proj[0]
+    (p / "data" / "codex_runs").mkdir(parents=True)
+    for d in (p / "data", p / "data" / "codex_runs"):
+        d.chmod(0o755)
+    r = subprocess.run([BASH, "-c", 'umask 022; exec "$0" tools/codex_impl.sh docs/specs/s.md low', BASH], cwd=p,
+                       env=env_for(proj, "umask"), capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    runs = [d for d in (p / "data" / "codex_runs").iterdir() if d.name.endswith("-s")]
+    assert len(runs) == 1 and (runs[0] / "stdout.1.log").exists()
+    for d in (p / "data", p / "data" / "codex_runs", runs[0]):
+        assert _mode(d) == 0o700, d
+    assert Path(str(proj[2]) + ".umask").read_text().strip() == "0022"  # Codex が作るファイルの権限は変えない
+
+
+def test_private_dir_leaves_symlink_target_alone(proj, tmp_path):
+    """data/ がリンクなら chmod しない（chmod はリンク先をたどる）。ロックは取れる"""
+    p = proj[0]
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside.chmod(0o755)
+    (p / "data").symlink_to(outside)
+    r = subprocess.run([BASH, "-c", '. tools/_codex_common.sh && acquire_lock && release_lock'], cwd=p, env=env_for(proj, "x"),
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert _mode(outside) == 0o755 and (outside / "codex_runs").is_dir()
+
+
+def test_luminous_halt_makes_dirs_private(proj):
+    p = proj[0]
+    safe = proj[3] / "luminous-codex"
+    for d in (p / "data", p / "logs", safe):
+        d.mkdir(parents=True, exist_ok=True)
+        d.chmod(0o755)
+    r = _halt_cmd(proj, "on", "x")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    for d in (p / "data", p / "logs", safe):
+        assert _mode(d) == 0o700, d
+
+
+def test_luminous_halt_private_dir_skips_links_and_files_and_never_blocks(proj, tmp_path):
+    """logs/ がリンクならリンク先の権限を変えない。data がファイルなら権限を変えない。chmod が失敗しても on は止まらない"""
+    p = proj[0]
+    outside = tmp_path / "outside_logs"
+    outside.mkdir()
+    outside.chmod(0o755)
+    (p / "logs").symlink_to(outside)
+    failing = tmp_path / "nochmod"
+    failing.mkdir()
+    (failing / "chmod").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    (failing / "chmod").chmod(0o755)
+    env = env_for(proj, "x")
+    env["PATH"] = f"{failing}{os.pathsep}{env['PATH']}"
+    r = subprocess.run([BASH, "tools/luminous_halt.sh", "on", "chmod が失敗"], cwd=p, env=env, capture_output=True, text=True, timeout=90)
+    assert r.returncode == 0 and _halt_path(proj).exists(), (r.stdout, r.stderr)  # 失敗しても止めない
+    assert _safe_halt_log(proj).read_text(encoding="utf-8").count(" on ") == 1
+    r = _halt_cmd(proj, "on", "x")  # 本物の chmod で: リンクの logs/ は触らない
+    assert r.returncode == 0 and _mode(outside) == 0o755
+    _unlock_flags(tmp_path)
+    _halt_path(proj).unlink()
+    shutil.rmtree(p / "data")
+    (p / "data").write_text("not a dir\n", encoding="utf-8")
+    (p / "data").chmod(0o644)
+    r = _halt_cmd(proj, "on", "x")
+    assert r.returncode == 1 and _mode(p / "data") == 0o644  # フォルダでないものは chmod しない

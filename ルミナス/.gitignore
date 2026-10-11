@@ -8,9 +8,18 @@
 *.p12
 secrets/
 .claude/settings.local.json
+# 鍵・資格情報の置き忘れ（guard-protected の SECRET・settings の deny と揃える。secret-scan は OAuth の client_secret の JSON・.netrc・
+# 接頭辞の無いトークンを見逃すので、名前で公開を防ぐ。id_rsa*・id_ed25519* は公開鍵 .pub も含めて入れない）
+.envrc
+credentials.json
+.netrc
+id_rsa*
+id_ed25519*
 
-# OS / editor
+# OS / editor（._* と .AppleDouble は exFAT・SMB・unzip で Mac が作る付随ファイル）
 .DS_Store
+._*
+.AppleDouble
 Thumbs.db
 
 # ルミナスの一時ファイル・依存

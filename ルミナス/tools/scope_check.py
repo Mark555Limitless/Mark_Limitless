@@ -20,6 +20,7 @@ snapshot・count・quarantine-git・compare・recheck は --real-gitdir <GITDIR>
 .git の判定は大文字小文字を区別しない（Mac の既定のファイルシステムでは .GIT も git が .git として読むため）。
 ALLOWED との比較はパスと ALLOWED の両方を NFC にそろえる（記録する名前は変えない）。
 Mac の Finder の .DS_Store は、条件を満たすときだけ違反にせず「記録ファイルの変更」として一覧に出す（is_finder_meta）。
+走査で読めないフォルダがあれば、黙って飛ばさずに終了 1（点検できない）にする（走査中に消えたフォルダだけは無視。_walk_error_for）。
 """
 from __future__ import annotations
 
@@ -116,6 +117,23 @@ def _no_content(rel: str) -> bool:
     return rel.split("/", 1)[0] in HEAVY_TOP
 
 
+class UnreadableDir(Exception):
+    """走査で読めないフォルダがあった（権限・Mac のプライバシー制御など）。中を比べられないので点検を止める（main が終了 1 にする）。"""
+
+
+
+def _walk_error_for(root: str):
+    """os.walk の onerror を作る。読めないフォルダを黙って飛ばさない（実行の前から読めない・Codex が作って 000 や 111 にした
+    フォルダの中の変更・非公開の印・入れ子の .git を、OK のまま見落とさない）。走査中に消えたフォルダだけは無視する（中のファイルは
+    削除として検出されるので、守りは弱まらない）。表示するパスは根からの相対（Mac の /Users/<名前>/… を記録や引き継ぎに残さない）。"""
+    def onerror(e: OSError) -> None:
+        if isinstance(e, FileNotFoundError):
+            return
+        where = _rel(root, e.filename) if e.filename else "?"
+        raise UnreadableDir(f"読めないフォルダがあり、点検できません（中の変更を見落とさないよう止めます）: {where}（{e.strerror}）") from e
+    return onerror
+
+
 def _rel(root: str, full: str) -> str:
     return os.path.normpath(os.path.relpath(full, root)).replace(os.sep, "/")
 
@@ -154,7 +172,7 @@ def snapshot(root: str, real_gitdir: str = "") -> Dict[str, dict]:
     contents: Dict[str, str] = {}
     root = os.path.abspath(root)
     real_git = os.path.realpath(real_gitdir) if real_gitdir else ""
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False, onerror=_walk_error_for(root)):
         keep = []
         for d in dirnames:
             full = os.path.join(dirpath, d)
@@ -224,7 +242,7 @@ def find_git(root: str) -> List[str]:
     """作業フォルダ内の .git をすべて探す（__pycache__・.venv・node_modules の中も）。git は実行しない。"""
     root = os.path.abspath(root)
     found = []
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False, onerror=_walk_error_for(root)):
         for name in dirnames + filenames:
             if is_git_name(name):
                 found.append(_rel(root, os.path.join(dirpath, name)))
@@ -643,4 +661,8 @@ def main(argv: List[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except UnreadableDir as err:  # 終了 1: codex_impl.sh・codex_opinion.sh は「点検できなかった」（2）か違反（3）として止める
+        print(f"scope_check: {err}", file=sys.stderr)
+        sys.exit(1)

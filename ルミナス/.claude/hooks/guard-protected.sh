@@ -35,7 +35,7 @@ esac
 deny() { echo "ブロック（guard-protected）: $1" >&2; exit 2; }
 
 NFD_PU="$(printf '\343\203\225\343\202\232')"   # 「プ」の NFD（フ＋U+309A）。バイト列で組み立てる
-PROT='(CHARTER\.md|\.env\.example|VIRTUAL_MARK\.md|ROUTINE\.md|CLAUDE\.md|AGENTS\.md|最終(プ|'"$NFD_PU"')ロン(プ|'"$NFD_PU"')ト|\.claude/|\.codex/|\.githooks/|\.mcp\.json|secret-scan\.sh|sync-obsidian\.sh|build-final-prompt-docx\.mjs|package(-lock)?\.json|luminous_halt)'
+PROT='(CHARTER\.md|\.env\.example|VIRTUAL_MARK\.md|ROUTINE\.md|CLAUDE\.md|AGENTS\.md|最終(プ|'"$NFD_PU"')ロン(プ|'"$NFD_PU"')ト|\.claude/|\.codex/|\.githooks/|\.mcp\.json|secret-scan\.sh|sync-obsidian\.sh|build-final-prompt-docx\.mjs|package(-lock)?\.json|luminous_halt|\.gitattributes)'
 WRITE='(sed[^|;&]*[[:space:]]-i|perl[^|;&]*[[:space:]]-i|>>?|[[:space:]]tee[[:space:]]|(^|[[:space:];&|(`])(mv|cp|rm|truncate|chmod|chown|ln|install|rsync|dd|unlink|patch)[[:space:]]|git[[:space:]]+(checkout|restore|reset|mv|rm|apply|am|stash)[[:space:]]|(python3?|node|ruby|perl|php)[[:space:]]+-([^m]|$)|write_text|writeFile|open\([^)]*["'"'"'][wa])'
 SECRET='((^|[^A-Za-z0-9_])\.env(rc)?(\.[A-Za-z0-9_.-]+)?([^A-Za-z0-9_.-]|$)|settings\.local\.json|_非公開|env_backups|\.pem([[:space:]"'"'"']|$)|\.p8([[:space:]"'"'"']|$)|\.p12([[:space:]"'"'"']|$)|id_rsa|id_ed25519|\.netrc|credentials\.json)'
 READ='(^|[[:space:];&|(`])(cat|less|more|head|tail|grep|rg|awk|sed|cp|scp|curl|base64|xxd|od|strings|source|python3?|node|jq|bat|nl|diff|pbcopy|open|hexdump|ditto|cut|sort|tr|perl)[[:space:]]'

@@ -19,7 +19,8 @@ if git -C "$HERE" rev-parse --show-toplevel >/dev/null 2>&1; then
     echo "!!! git フックを有効化できませんでした（$HP に実行できる pre-commit / pre-push がありません）。鍵の検査が効いていません" >&2; HOOKS_NG=1
   fi
 else
-  echo "git リポジトリではないため git フックは未設定（git init 後に再実行）"
+  # git init はさせない（GitHub と無関係な別のリポジトリになる）。.venv と npm の段は続け、最後に失敗で終える
+  echo "!!! git リポジトリの中ではないため git フック（pre-commit / pre-push の鍵の検査）を設定できません。git init はしないこと（GitHub と無関係な別のリポジトリになる）。GitHub の Mark_Limitless を git clone した写しの ルミナス/ で bash scripts/setup.sh を実行し直す" >&2; HOOKS_NG=1
 fi
 # Python の仮想環境（orch・tests 用。requests・python-dotenv・pytest）
 if command -v python3 >/dev/null 2>&1; then
@@ -35,6 +36,11 @@ cat <<'MSG'
   - Codex は ChatGPT アプリ（Codex 同梱）にログイン済みであること
   - Gemini / Jev の鍵は  bash tools/set_env_key.sh GEMINI_API_KEY  /  bash tools/set_env_key.sh TYPESAFE_API_KEY  で .env（600・git 管理外）に入れる。チャットには貼らない
   - 点検:  .venv/bin/python -m orch.health
-  - このフォルダで  claude  を起動すると hooks（復元・鍵ガード・Stop ゲート・同期）が有効になる
+  - ルミナス/ で  claude  を起動すると hooks（復元・鍵ガード・Stop ゲート・同期）が有効になる。効いているかを確かめる（起動しただけでは分からない）:
+      (1) 起動直後に「=== ルミナス憲章の復元」が出る  (2) ls state/.sessions/ に新しい <id>.start ができる
+      (3) /hooks に SessionStart・PreToolUse・PostToolUse・Stop・SessionEnd が並ぶ
+      (4) Claude に Bash で  true luminous-hook-canary  を実行させ、「canary: hooks は効いています」で断られる
+          断られなければ hooks は効いていない。起動したフォルダ・hooks の信頼の承認・Claude Code の PATH に jq か動く python3 があるか、を確かめる
+      (5) 端末で  bash scripts/test-hooks.sh（/bin/bash のまま）
 MSG
-[ "$HOOKS_NG" = 0 ] || exit 1
+[ "$HOOKS_NG" = 0 ] || { echo "!!! git フック（鍵の検査）が効いていません。上の !!! の行を読んで直すこと" >&2; exit 1; }

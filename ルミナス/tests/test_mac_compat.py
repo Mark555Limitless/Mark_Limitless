@@ -554,11 +554,80 @@ def test_codex_impl_executable_ds_store_is_violation(proj):
     assert r.returncode == 3 and "docs/.DS_Store" in r.stderr, (r.stdout, r.stderr)
 
 
-def test_ds_store_is_gitignored():
-    """.DS_Store を見ない前提（公開されない）を固定する。"""
-    for rel in (".DS_Store", "docs/.DS_Store", "orch/sub/.DS_Store"):
-        r = subprocess.run(["git", "check-ignore", "-q", "--no-index", rel], cwd=ROOT, env=dict(os.environ, **GIT_ENV))  # 利用者の除外設定で通さない
-        assert r.returncode == 0, f"{rel} が .gitignore に入っていない"
+# ---- .gitignore: Mac の付随ファイル・鍵の置き忘れ・リポジトリの根（Mac 切替の監査 idx11・19・23）----
+MAC_JUNK = (".DS_Store", "docs/.DS_Store", "orch/sub/.DS_Store", "._x", "docs/._README.md", ".AppleDouble/x", "docs/.AppleDouble/x")
+SECRET_NAMES = (".envrc", "credentials.json", "docs/credentials.json", ".netrc", "id_rsa", "id_rsa.pub", "id_ed25519",
+                "id_ed25519.pub", "x.key", "x.pem", "x.p8", "x.p12", ".env", ".env.local")   # guard-protected の SECRET・settings の deny と同じ名前
+PUBLIC_NAMES = (".env.example", "README.md", "docs/review.md", "docs/credentials.md", "docs/a._b.md", "envrc.md",
+                ".claude/settings.json", ".claude/hooks/x.sh", "tools/scope_check.py")   # 似ているが公開してよい名前
+
+
+def _ignored(cwd, rel):
+    """git の除外の判定。利用者の除外設定（~/.config/git/ignore・core.excludesFile）を通さない。0=除外される"""
+    return subprocess.run(["git", "check-ignore", "-q", "--no-index", rel], cwd=cwd, env=dict(os.environ, **GIT_ENV)).returncode
+
+
+def _top_prefix():
+    """ルミナス/ が上のリポジトリ（GitHub の写しの根）の中にあり、そのリポジトリが ルミナス/ を追跡しているときは根への接頭辞（"../"）。
+    ルミナス/ だけのリポジトリに移したとき・無関係の上位のリポジトリの中にあるときは None（根の .gitignore は確かめない）。"""
+    env = dict(os.environ, **GIT_ENV)
+    cdup = subprocess.run(["git", "rev-parse", "--show-cdup"], cwd=ROOT, env=env, capture_output=True, text=True)
+    if cdup.returncode != 0 or not cdup.stdout.strip():
+        return None
+    tracked = subprocess.run(["git", "ls-files", "--error-unmatch", ".gitignore"], cwd=ROOT, env=env, capture_output=True)
+    return cdup.stdout.strip() if tracked.returncode == 0 else None
+
+
+@pytest.mark.parametrize("rel", MAC_JUNK + SECRET_NAMES)
+def test_ds_store_is_gitignored(rel):
+    """.DS_Store を見ない前提（公開されない）を固定する。Mac の付随ファイル（._*・.AppleDouble）と鍵・資格情報の名前も
+    ルミナス/.gitignore で除外する（secret-scan は OAuth の JSON・.netrc・接頭辞の無いトークンを見逃すため、名前で公開を防ぐ）。"""
+    assert _ignored(ROOT, rel) == 0, f"{rel} が .gitignore に入っていない"
+
+
+@pytest.mark.parametrize("rel", PUBLIC_NAMES)
+def test_gitignore_does_not_hide_public_files(rel):
+    assert _ignored(ROOT, rel) == 1, f"{rel} まで .gitignore で除外されている"
+
+
+def test_gitignore_matches_no_tracked_file():
+    """足した名前が、いま追跡中（公開中）のファイルに当たらない（当たると以後の変更が黙って見えなくなる）。"""
+    pre = _top_prefix()
+    top = ROOT / pre if pre else ROOT   # 根の .gitignore の名前（._* など）は根の index.html などにも効くので、リポジトリ全体を見る
+    out =subprocess.run(["git", "ls-files", "-z", "-c", "-i", "--exclude-standard"], cwd=top, env=dict(os.environ, **GIT_ENV),
+                         capture_output=True, text=True, check=True).stdout
+    assert out == "", out.split("\0")
+
+
+def test_repo_root_gitignore_covers_mac_junk_and_worktrees():
+    """根（clone の Mark_Limitless/）の .DS_Store などは ルミナス/.gitignore が効かないので、根の .gitignore で除外する。
+    worktree の置き場は根と ルミナス/ の両方。ルミナス/ から `git add -A` を打つと根の分もステージされる。"""
+    pre = _top_prefix()
+    if pre is None:
+        pytest.skip("ルミナス/ がリポジトリの根（または無関係の上位のリポジトリの中）にある")
+    for rel in (".DS_Store", "._x", ".AppleDouble/x", ".Spotlight-V100/x", ".Trashes/x", ".claude/worktrees/w/f", "ルミナス_非公開/x"):
+        assert _ignored(ROOT, pre + rel) == 0, f"根の {rel} が除外されていない"
+    assert _ignored(ROOT, ".claude/worktrees/w/f") == 0, "ルミナス/.claude/worktrees/ が除外されていない"
+    for rel in ("index.html", "notes.md", "a._b.md"):
+        assert _ignored(ROOT, pre + rel) == 1, f"根の {rel} まで除外されている"
+
+
+@pytest.mark.parametrize("has_git", [True, False])
+def test_ignored_worktree_is_still_found_as_nested_git(tmp_path, has_git):
+    """.claude/worktrees/ を git で除外しても、そこにできた worktree（.git ファイル）は hooks の入れ子の .git の検査に見つかる
+    （hook_nested_git は git を使わず find で探すので、除外の影響を受けない）。"""
+    r = tmp_path / "ルミナス"
+    wt = r / ".claude" / "worktrees" / "w"
+    wt.mkdir(parents=True)
+    (r / ".gitignore").write_text("**/.claude/worktrees/\n", encoding="utf-8")
+    if has_git:
+        (wt / ".git").write_text("gitdir: /nonexistent/.git/worktrees/w\n", encoding="utf-8")
+    out = subprocess.run([BASH, "-c", '. "$1"; hook_nested_git', "x", str(ROOT / ".claude" / "hooks" / "_lib.sh")],
+                         env=dict(os.environ, ROOT=str(r)), capture_output=True, text=True, timeout=60).stdout.strip()
+    if has_git:
+        assert out.endswith("/.claude/worktrees/w/.git"), out
+    else:
+        assert out == "", out
 
 
 # ---- orch: requests が無い python3 でも点検と既定値の経路は動く ----

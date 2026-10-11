@@ -40,6 +40,7 @@ main() {
   case "$NG" in
     0) ;;
     3) echo "codex_opinion: 作業フォルダ内に .git があります。git コマンドを使わずに確かめ、外へ移してから実行してください" >&2; return 2;;
+    1) echo "codex_opinion: .git の点検を実行できませんでした（終了 1）。上の scope_check の表示が「読めないフォルダ」なら、そのフォルダの権限を直すか作業フォルダの外へ移してから実行してください。それ以外なら python3（${SAFE_PY}）が動くか確かめてください" >&2; return 2;;
     *) echo "codex_opinion: .git の点検を実行できませんでした（終了 $NG: ${SAFE_PY}）。python3 が動くか確かめてください（Mac では xcode-select --install）" >&2; return 2;;
   esac
   [ -e data/.codex_violation ] && { echo "codex_opinion: 前回の Codex 実行の違反が未処理です（data/.codex_violation）" >&2; return 2; }

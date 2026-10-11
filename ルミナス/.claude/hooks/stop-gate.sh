@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Stop hook: 「毎回書く」の強制。このセッションの開始後に 今日の digest・HANDOVER.md・obsidian/ルミナス.md が更新されていなければ終了をブロック。
 # - 無人実行（FABLE5_HEADLESS=1）では止めない（無人の便は自分の記録手順で書く）
+# - 全体停止中と Codex の実行中（data/codex_runs/.lock の持ち主が生きている）は止めない（実行中は記録を書けない。終了後の次の Stop で催促する）
 # - stop_hook_active=true（既に続行中）なら必ず許可（ループ防止。Claude Code 側にも連続上限あり）
 # - 開始時刻はセッション別（state/.sessions/<id>.start）。日付は LUMINOUS_TZ（既定 Asia/Tokyo）
 # - LUMINOUS_GATE_MODE=edits なら、このセッションでファイル編集が無かった場合は許可（既定 always）
@@ -21,6 +22,9 @@ block_json() {
   printf '{"decision":"block","reason":"%s"}\n' "$(printf '%s' "$1" | tr '\000-\037' ' ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
 }
 { [ -e "$ROOT/data/.luminous_halt" ] || [ -L "$ROOT/data/.luminous_halt" ]; } && exit 0   # 全体停止中は終了を止めない（閉じ込めない。docs/specs/20261008_global_halt.md）
+# Codex の実行中は記録を書けない（codex-lock-guard が Edit を止め、Bash で書けば範囲検査の違反になる）。終了後の次の Stop で催促する。
+# 持ち主の PID は 2 以上の数字だけを認める（0 や -1 は kill -0 が成功し、実行中でないのに素通りするため）
+OWNER_="$(hook_codex_owner)"; case "$OWNER_" in ''|*[!0-9]*) ;; *) [ "$OWNER_" -ge 2 ] 2>/dev/null && hook_codex_running && exit 0 ;; esac
 SID="$(hook_session_id "$INPUT")"
 MARK="$ROOT/state/.sessions/$SID.start"
 [ -f "$MARK" ] || exit 0

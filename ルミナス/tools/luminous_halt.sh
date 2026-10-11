@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# 全体停止の印（docs/specs/20261008_global_halt.md）。この機械の中のルミナスの新しい作業を止める。
+# 全体停止の印（docs/specs/20261008_global_halt.md）。このルミナスのフォルダ（印を置いた根）の新しい作業を止める。同じ機械の別のフォルダは止まらない。
 #   bash tools/luminous_halt.sh on [理由]   印を作る（誰が実行してもよい。既にあれば成功。Codex の実行中ならラッパーの PID に TERM）
 #   bash tools/luminous_halt.sh status      停止中かと理由を表示
 #   bash tools/luminous_halt.sh off         印を消す（Mark が端末で。「解除」と入力。うっかり防止であって守りではない）
 # 印: <ルミナスの根>/data/.luminous_halt（git 管理外）。ファイルでもリンクでも、名前があれば停止中。場所は環境変数で動かさない。
-# 「AI 側から外せない」の根拠は hooks と権限の設定（B の部分）。別の機械（Mac とクラウド）は止まらない。
-# on の記録は logs/halt.log と、Codex が書けない置き場（LUMINOUS_SAFE_DIR、既定 ~/.cache/luminous-codex/halt.log）の両方に残す
-# （実行中の Codex が印を消しても、ラッパーが後者と突き合わせて違反にできる）。
+# 「AI 側から外せない」の根拠は hooks と権限の設定（B の部分）。別の機械（Mac とクラウド）も、同じ機械の別のルミナスのフォルダ（正本と写し・worktree）も止まらない。
+# on の記録は logs/halt.log と、Codex が書けない置き場（LUMINOUS_SAFE_DIR、既定 ~/.cache/luminous-codex/halt.<根のフォルダの番号>.log）の両方に残す
+# （実行中の Codex が印を消しても、ラッパーが後者と突き合わせて違反にできる）。置き場の記録はフォルダごとに分ける（halt_fid）。
 # 終了コード: 0=成功 / 1=印を作れない・消せない（止まっていない） / 2=使い方・端末でない・中止 / 3=TERM の後に印が消されていたので作り直した（要確認）
 set -u
 unset CDPATH   # 端末で export された CDPATH で、cd が別の場所へ行く・パスを標準出力に出す（PROJ が 2 行になる）のを防ぐ
@@ -17,6 +17,15 @@ PROJ_REAL="$(cd "$PROJ" && pwd -P)"
 HALT="$PROJ/data/.luminous_halt"
 SAFE_BASE="${LUMINOUS_SAFE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/luminous-codex}"
 TERM_PID=""
+# 安全な置き場の記録の名前に使う、根のフォルダの番号（inode）。同じ機械の別のルミナスのフォルダで on しても、こちらで実行中の
+# ラッパーが「Codex が消した疑い」にしないよう、記録をフォルダごとに分ける。パスの綴りではなく番号なので、端末と Claude Code で
+# 根のパスの大文字小文字・NFC/NFD が違っても同じ名前になる（別のボリュームで番号が重なれば記録を共有する＝従来の止める側の動き）。
+# codex_impl.sh（_codex_common.sh）と同じ式（tests が一致を確かめる）
+halt_fid() { local i; i="$(ls -di "$PROJ_REAL" 2>/dev/null | awk 'NR==1{print $1}')"; case "$i" in ''|*[!0-9]*) i=0;; esac; printf '%s\n' "$i"; }
+SAFE_HLOG="$SAFE_BASE/halt.$(halt_fid).log"
+# 作ったフォルダ（data/・logs/・安全な置き場）を本人だけが読めるようにする。umask は変えない（ほかのファイルの権限を変えないため）。
+# リンクとフォルダでないものは触らない（chmod はリンク先をたどるため）。失敗しても止めない
+private_dir() { local d; for d in "$@"; do [ -d "$d" ] && [ ! -L "$d" ] && chmod 700 "$d" 2>/dev/null; done; return 0; }
 
 halted() { [ -e "$HALT" ] || [ -L "$HALT" ]; }
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -34,8 +43,8 @@ trunc() {  # $1=文字数。標準入力 → 標準出力
 sanitize() { printf '%s' "${*:-}" | tr '\n' ' ' | trunc 200; }
 log_line() {  # $1=on|off $2=理由
   local line; line="$(printf '%s %s %s' "$(now_utc)" "$1" "$(printf '%s' "$2" | trunc 80)")"
-  mkdir -p "$PROJ/logs" 2>/dev/null && printf '%s\n' "$line" >> "$PROJ/logs/halt.log" 2>/dev/null
-  mkdir -p "$SAFE_BASE" 2>/dev/null && printf '%s\n' "$line" >> "$SAFE_BASE/halt.log" 2>/dev/null
+  mkdir -p "$PROJ/logs" 2>/dev/null && private_dir "$PROJ/logs" && printf '%s\n' "$line" >> "$PROJ/logs/halt.log" 2>/dev/null
+  mkdir -p "$SAFE_BASE" 2>/dev/null && private_dir "$SAFE_BASE" && printf '%s\n' "$line" >> "$SAFE_HLOG" 2>/dev/null
   return 0
 }
 
@@ -104,7 +113,7 @@ after_term() {
   fi
   ( set -C; printf '%s %s\n' "$(now_utc)" "再作成（TERM の後に印が消えていた）" > "$HALT" ) 2>/dev/null
   halted || { echo "luminous_halt: !!! TERM の後に印が消えていて、作り直せませんでした。止まっていません（${HALT}）" >&2; return 1; }
-  [ "$(uname -s)" = Darwin ] && chflags uchg "$HALT" 2>/dev/null
+  [ "$(uname -s)" = Darwin ] && chflags -h uchg "$HALT" 2>/dev/null   # -h: リンクならリンク自身に付ける（リンク先の Mark のファイルを変えない）
   log_line on "再作成（TERM の後に印が消えていた）"
   echo "luminous_halt: !!! TERM の後に印が消えていました（実行中の Codex が消した疑い）。作り直しました。data/codex_runs/ の記録と差分を確かめてください" >&2
   return 3
@@ -112,17 +121,17 @@ after_term() {
 
 cmd_on() {
   local reason; reason="$(sanitize "${*:-}")"; [ -n "$reason" ] || reason="(理由なし)"
-  mkdir -p "$PROJ/data" 2>/dev/null
+  mkdir -p "$PROJ/data" 2>/dev/null; private_dir "$PROJ/data"
   if halted; then
     echo "luminous_halt: 既に全体停止中です（印はそのまま。data/.luminous_halt）"
     log_line on "$reason"; term_codex; after_term; return $?
   fi
-  # set -C（noclobber）で O_EXCL 相当にする: 確認と書き込みの間に symlink を置かれても、別のファイルを上書きしない
+  # set -C（noclobber）で O_EXCL 相当にする: 確認と書き込みの間に symlink を置かれても、別のファイルを上書きしない。属性もリンク自身に付ける（chflags -h）
   if ! ( set -C; printf '%s %s\n' "$(now_utc)" "$reason" > "$HALT" ) 2>/dev/null; then
     if halted; then echo "luminous_halt: 印は同時に別の経路で作られていました（内容は書き換えません）"
     else echo "luminous_halt: 印を作れませんでした。止まっていません（${HALT}）" >&2; return 1; fi
   fi
-  [ "$(uname -s)" = Darwin ] && chflags uchg "$HALT" 2>/dev/null
+  [ "$(uname -s)" = Darwin ] && chflags -h uchg "$HALT" 2>/dev/null
   log_line on "$reason"
   term_codex
   echo "luminous_halt: 全体停止中にしました（data/.luminous_halt）。解除は Mark が端末で: bash tools/luminous_halt.sh off"
@@ -151,7 +160,7 @@ cmd_off() {
   printf '全体停止を解除します。「解除」と入力して Return: '
   IFS= read -r ans || ans=""
   [ "$ans" = "解除" ] || { echo "luminous_halt: 中止しました（印は残っています）"; return 2; }
-  [ "$(uname -s)" = Darwin ] && chflags nouchg "$HALT" 2>/dev/null
+  [ "$(uname -s)" = Darwin ] && chflags -h nouchg "$HALT" 2>/dev/null   # -h: リンク先の属性は外さない
   rm -f "$HALT" 2>/dev/null
   halted && { echo "luminous_halt: 印を消せませんでした（${HALT}）" >&2; return 1; }
   log_line off "$reason"

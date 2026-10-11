@@ -190,7 +190,7 @@ Agent Team は実験的機能で、有効化すると名前付きサブエージ
 | 全ノードへの号令 | サブエージェント起動時に CLAUDE.md（最初に読む: 憲章・自走範囲・HANDOVER.md）が、Codex には AGENTS.md が自動で読まれる | **実装済み**（`CLAUDE.md`・`AGENTS.md`） |
 | 状態の保存 | 終了前に `HANDOVER.md`（先頭に節）・`digest/YYYY-MM-DD.md`・`obsidian/ルミナス.md` を更新。未更新なら Stop hook が終了を止める（セッション別の開始時刻で判定、日付は Asia/Tokyo、無人実行は対象外） | **実装済み**（`.claude/hooks/stop-gate.sh`） |
 | 外部AIの点検 | SessionStart で Codex・Gemini・Jev の鍵・疎通・当日の支出を 3 行で表示 | **実装済み**（`orch/health.py`） |
-| 他の記録への書き込み | SessionEnd hook が Obsidian vault へ同期し、最終プロンプトの docx を毎回再生成 | **部分**: docx は実装済み。Obsidian 同期は vault の場所（`LUMINOUS_OBSIDIAN_DIR`）を設定した環境でのみ動く |
+| 他の記録への書き込み | SessionEnd hook が Obsidian vault へ同期し、最終プロンプトの md が変わったときだけ docx を再生成（`LUMINOUS_PRIVATE_DIR` があれば非公開フォルダにも写す） | **部分**: docx は実装済み。Obsidian 同期は vault の場所（`LUMINOUS_OBSIDIAN_DIR`）を設定した環境でのみ動く |
 | 圧縮前の要約保存 | PreCompact hook で圧縮前に要約を保存 | **未実装**（Phase 2） |
 | 自己改変の検知 | 憲章・権限・hooks・自走範囲の編集に確認（`permissions.ask`）、未コミット差分を SessionStart で警告 | **実装済み**（`.claude/settings.json`、restore-charter） |
 | モデル切替の記録 | PostModelSwitch hook が `state/escalations.log` に機械記入 | **実装済み**（`.claude/hooks/log-model-switch.sh`） |
@@ -272,7 +272,7 @@ GO/NO-GO 判定、通常 Opus 4.8 以下・重大時のみ Fable 5 へのエス�
 4. **1 日の費用上限**（USD）と、超えたときの挙動（提案: 探索予算を「低」に自動で落とし、報告）
 5. **実行場所**: 手元の Mac の正本フォルダを正本にし、GitHub の写しを定期同期する運用でよいか
 6. **分譲指示書 §3.3 の 3 点**（2026-10-08）: ① 鍵をルミナス専用に新規発行するか（推奨: 新規。費用を分けて見られ、止めるときや漏れたときの影響がルミナスだけで済む）② 上限（推奨: Gemini 1日 $1、Jev 1日60回・月 $1、Codex は1日の実行回数の目安。サブスク枠を原本・脳でんちと共有）③ ルミナスを公開リポジトリに置き続けるか（現状は公開リポジトリ `Mark_Limitless` の中。非公開の別リポジトリに移すことを推奨）
-7. **最終プロンプトの正本**: md を正本とし docx は毎回再生成する運用でよいか（docx を直接編集する運用なら逆向きの同期が要る）
+7. **最終プロンプトの正本**: md を正本とし docx は md が変わったときに再生成する運用でよいか（docx を直接編集する運用なら逆向きの同期が要る）
 8. **費用上限の意味**: API 換算の USD か、サブスク（Max 等）の利用枠か
 9. **公開情報の掲載**: AI NEWS Select の X アカウント名などを、この公開フォルダに書いてよいか（現状は書いていない）
 10. **統治ルールの強化提案**（上位審査の結果）: 優先順位と解釈（C-1）、署名タグによる承認（C-2）、仮想Mark の改訂（V-1〜V-4）を `docs/proposals/20261007-governance-v0.2.md` に差分で用意した。承認・修正・却下を決めてほしい
@@ -283,7 +283,7 @@ GO/NO-GO 判定、通常 Opus 4.8 以下・重大時のみ Fable 5 へのエス�
 
 ## 12. 次の一手
 
-1. Mac の正本フォルダで `bash scripts/setup.sh`（Python 仮想環境・git フック）を実行する。前提: Xcode コマンドラインツール（`xcode-select --install`）。無いと `/usr/bin/python3` が動かず `python3 -m venv` で止まる
+1. Mac で GitHub の Mark_Limitless を git clone した写しの `ルミナス/` で `bash scripts/setup.sh`（Python 仮想環境・git フック）を実行する（git 管理外のフォルダでは失敗で終わる。`git init` はしない）。前提: Xcode コマンドラインツール（`xcode-select --install`）。無いと `/usr/bin/python3` が動かず `python3 -m venv` で止まる。続けて `ルミナス/` で `claude` を起動し、hooks が効いているかを確かめる（起動しただけでは分からない）: 起動直後に「=== ルミナス憲章の復元」が出る・`state/.sessions/` に開始の印（`<id>.start`）ができる・`/hooks` に SessionStart・PreToolUse・PostToolUse・Stop・SessionEnd が並ぶ・Bash の `true luminous-hook-canary` が「canary: hooks は効いています」で断られる。断られなければ hooks は効いていない（起動したフォルダ・hooks の信頼の承認・jq か動く python3 があるかを確かめる。手順は `scripts/setup.sh` の最後の案内）
 2. 分譲指示書の段階1 試験1〜3 を Mac で行う（`docs/specs/README.md`）。続けて `bash tools/codex_opinion.sh docs/astra-packets/WP-1〜4` で Astra に作業パケットを渡し、回答を `docs/astra-replies/` に残す
 3. 鍵を `tools/set_env_key.sh` で入れ、段階2・3 を確認する（`.venv/bin/python -m orch.gemini check`、`.venv/bin/python -m orch.decisions --check`・`--demo --backend jev`。依存の requests は .venv にだけ入る。.venv が無ければ先に `bash scripts/setup.sh`）
 4. Mac で原本（AI NEWS Select の bot）の部品と見比べ、差があれば指示書を書いて Codex で直す（`docs/support-ai.md` §10）

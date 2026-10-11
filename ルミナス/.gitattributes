@@ -1,0 +1,5 @@
+# 記録ファイルは、クラウドと Mac の両方の書き込みを残して自動でマージする（Mark の決定 2026-10-11。state/decisions/20261011-mac-operation-decisions.md）。
+# 組み込みの union ドライバなので外部コマンドは動かない。-diff・binary・filter は書かない（pre-commit・pre-push の鍵の検査が git diff を使うため）。保護ファイル
+/HANDOVER.md merge=union
+/digest/[0-9]*.md merge=union
+/state/escalations.log merge=union

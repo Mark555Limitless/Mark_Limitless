@@ -30,13 +30,20 @@
 
 **任意**: hooks の python3 の起動回数、`find_codex` に `~/Applications`、型注釈。
 
-## 3. Mac でだけ確かめること（6 件。手順）
+## 3. Mac でだけ確かめること（7 件。手順）
 1. **デスクトップアプリ同梱の Claude Code の版**: `PostModelSwitch` を知らない古い版だと、`settings.json` 全体（hooks も permissions も）が黙って読まれない可能性がある。起動後に `/hooks` でルミナスの hooks が並ぶこと、`true luminous-hook-canary` が断られることを確かめる（canary が「読まれていない」の目印）
 2. **環境変数**: デスクトップ版の Bash で `echo "${LUMINOUS_OBSIDIAN_DIR:-unset}"` を実行し、`.claude/settings.local.json` の `env` で届いているか見る。届かなければ Obsidian 同期は毎回スキップで、失敗にも見えない
 3. **`/usr/bin/python3` の実体**: `xcode-select -p; /usr/bin/python3 -c pass; echo $?` と `ls /usr/bin/jq`。CLT が無ければ hooks は（修正後）止める側に倒れるが、設定が要る: `xcode-select --install`
 4. **`ps` の非 ASCII**: Codex のラッパーを絶対パスで起動した状態で `bash tools/luminous_halt.sh on 試験` を打ち、「TERM を送りました」が出るか。出なければロケールのエスケープが原因（安全側だが停止が届かない）
 5. **`chflags uchg`**: `on` の後に `ls -lO data/.luminous_halt` で `uchg` が付くこと、`off` で外れること
 6. **Codex のサンドボックス**: `tools/codex_impl.sh` の実行で、Codex が `setsid` を許され、終了時にグループごと止まること。`-o` の出力が安全な置き場に書けること
+7. **個々の hooks と権限が効いているか**（canary の補い。canary が示すのは halt-guard が起動して JSON を読めたことだけ）: clone の `ルミナス/` で開いたセッションで、権限のモードは既定のまま、**鍵を入れる前**（HANDOVER の Mac の手順 8 より前）に行う。どれも害は無い
+   - (a) Bash で `head -c 0 .env` → 「ブロック（guard-protected）: 鍵・資格情報らしきファイルを Bash で読もうとしています」と断られる（halt-guard は通すので、guard-protected の配線の確認になる。通っても 0 バイトしか読まない）
+   - (b) Bash で `git commit --no-verify --dry-run` → 「ブロック（guard-protected）: git フックの迂回…」と断られる（通っても dry-run なので commit は作られない）
+   - (c) `/permissions` の ask に `Edit(/CHARTER.md)`・`Edit(/docs/review.md)` などが並ぶ。Edit で `docs/review.md` の末尾に空行を足そうとすると確認のダイアログが出る（「いいえ」を選ぶ）。ダイアログが出ずに変わったら、Mark が端末で `git diff -- docs/review.md` が空行 1 つだけであることを見てから `git checkout -- docs/review.md` で戻し、「権限の先頭の `/` が `ルミナス/` を根にしていない（git の根の `Mark_Limitless/` を根にしている恐れ）」と HANDOVER に書く
+   - (d) `/model` で切り替えると、`tail -n 1 state/escalations.log` に機械記入の行（`<時刻> | (作業名を追記) | <前のモデル> | <後のモデル> | …`）が 1 行増える（PostModelSwitch）
+   - (e) 試しのセッションを 1 回終えてから開き直し、`tail -n 3 state/.session-end.log` に新しい `--- <時刻> SessionEnd` の行がある（SessionEnd は失敗しか警告されないので、発火しなくても気づかない。閉じ方ごとの確認は §8.7）
+   - どれかが期待どおりでなければ、HANDOVER に書いて Phase 0 の門を通さない
 
 ## 4. 反証で落ちた指摘の代表（採らなかった理由）
 - 「デスクトップ版の hooks の PATH は `/usr/bin:/bin:/usr/sbin:/sbin` だけ」→ 公式文書（Local sessions の節）と食い違う。前提が成り立たない
@@ -63,3 +70,119 @@
 - 守りを少し緩めた点（Mark の確認を求める）: `scope_check.py` の `.DS_Store`（基本名が `.DS_Store`・通常ファイル・実行属性なし・1 MiB 以下・リンク数 1・途中に `.DS_Store` の名前なし のときだけ違反にせず「記録ファイルの変更」として一覧に出す）
 - 見送り（次の機会）: hooks の python3 の起動回数（jq の無い Mac で Bash 1 回あたり 5 回）、`echo $(<.env)` の形の読み取り、行継続の `sed \⏎ -i`、`GIT commit`・`/usr/bin/git commit` の拾い漏れ（本命の pre-commit は効く）、`codex-lock-guard` のパス比較の大文字小文字
 - Mac でだけ確かめること（追加）: `/bin/bash 3.2.57` で `tests/test_mac_compat.py` と `scripts/test-hooks.sh` が通ること（クラウドの bash 3.2.33 では `$RC）` の不具合が再現せず、静的な検出でしか確かめていない）、Finder を開いたままの `codex_impl.sh` で `.DS_Store` が「記録ファイルの変更」になること、BSD の `ps -o etime=` がスリープを含むこと（含まないとロックの誤判定）、CLT の無い Mac で `safe_python` と `trunc` がダイアログを出すか、`~/Applications/ChatGPT.app` に codex があるか、`test-hooks.sh` の BSD `cp -p`・`locale -a` の en_US.UTF-8
+
+## 8. Mac でだけ確かめること（第 2 弾。2026-10-11、監査の残りの反証から）
+- クラウドでは確かめられなかった 9 件。§3 の後に、Mac の司令塔（アプリの Bash）か Mark（端末）が行う。どちらで打つかは各項に書いた
+- コマンドは clone の `ルミナス/` で打つ（以下、clone の根を `<clone>` と書く）。8.2 の開き直しと 8.7 の終了のほかは、読むだけか使い捨ての一時フォルダだけを使う
+- 結果は HANDOVER に書く。**ローカルの絶対パス・vault の場所・PATH の中身は書かず**、「同じ／違う」「期待どおり／違った点」だけを書く。期待と違ったときの次の一手も各項に書いた
+
+### 8.1 起動フォルダと入れ子の .git の誤検知（idx0。アプリの Bash）
+```bash
+git rev-parse --show-toplevel
+ls -d ./.git 2>/dev/null
+d="$(dirname "$(pwd)")"; while :; do [ -e "$d/.git" ] && echo "祖先の .git: ${d}/.git"; [ "$d" = / ] && break; d="$(dirname "$d")"; done
+ROOT="$(pwd)" /bin/bash -c '. .claude/hooks/_lib.sh; hook_nested_git'
+ls -d ~/.git ~/Documents/.git 2>/dev/null
+```
+- 期待: toplevel が `<clone>`（Mark_Limitless）、`./.git` は無い、祖先の .git は `<clone>/.git` だけ、`hook_nested_git` の出力は空、最後の `ls` も何も出ない
+- 違えば: 祖先に別の .git がある（ホームや書類のフォルダが git 管理）と、hooks の入れ子 .git の検知が誤作動する。どこにあったかを HANDOVER に書き、片付けるかを Mark が決める
+
+### 8.2 hooks に届く環境（idx1。アプリの Bash と端末の両方）
+デスクトップアプリのセッションを 1 回閉じてから開き直す。アプリの Bash で次を実行し、端末（zsh）で打った結果と比べる。
+```bash
+tail -n 8 state/.session-end.log
+echo "PATH=${PATH}"
+for c in node npm jq python3 git timeout gtimeout; do printf '%s %s\n' "$c" "$(command -v "$c" || echo none)"; done
+echo "OBS=${LUMINOUS_OBSIDIAN_DIR:-unset} TZ=${LUMINOUS_TZ:-unset} GATE=${LUMINOUS_GATE_MODE:-unset}"
+/usr/bin/python3 -c pass; echo "py=$?"
+```
+- 期待: `.session-end.log` に「sync-obsidian: … （n 件）」があり、「未設定のためスキップ」と「node が無い」が無い。開き直したときの SessionStart の注入に「!!! git フック」「動く python3 もありません」「点検の結果が出ませんでした」「前回の SessionEnd で失敗」が出ない
+- 違えば: アプリと端末で見つかる道具（node・jq・python3）や値が違う。足りない値は `.claude/settings.local.json` の `env` に書く（書き方は `obsidian/README.md`）。道具が見つからないなら、どの名前が `none` だったかを HANDOVER に書く
+
+### 8.3 グローバルの SessionStart（idx2。端末。読むだけ・値は出さない）
+ルミナスのセッションで `/hooks` を開き、SessionStart に `restore-charter.sh` 以外（User の設定やプラグインのもの）があるかを見る。端末で次を実行する（jq が無ければ下の python3 の形で）。
+```bash
+jq '.hooks.SessionStart' ~/.claude/settings.json
+jq -r '(.env // {}) | keys[]' ~/.claude/settings.json
+ls -l "/Library/Application Support/ClaudeCode/managed-settings.json" 2>/dev/null
+```
+```bash
+python3 - <<'PY'
+import json, os
+d = json.load(open(os.path.expanduser("~/.claude/settings.json")))
+print(json.dumps(d.get("hooks", {}).get("SessionStart"), ensure_ascii=False, indent=1))
+print(sorted((d.get("env") or {}).keys()))   # 名前だけ。値は出さない
+PY
+```
+- 見つかったスクリプトを `cat` で読み、確かめる: `FABLE5_HEADLESS` の判定があるか、`CLAUDE_PROJECT_DIR` か cwd で Fable5 のフォルダ以外では何もしない条件があるか、副作用（ファイルの書き込み・送信）が無いか
+- 最後に、新しいセッションの司令塔に「受けた文脈に Fable5 AI NEWS Select の指示があるか」を 1 行で答えさせる
+- 違えば（ルミナスのセッションに Fable5 の指示が入る・副作用がある）: HANDOVER に書き、グローバルのフックに条件を足すかを Mark が決める（原本の設定なので、ルミナスからは変えない）
+
+### 8.4 worktree（idx8。アプリの画面と Bash）
+New session の画面で worktree のオプションが既定でオフか、Settings の Worktree location が空かを見る。普段のセッションの Bash で:
+```bash
+echo "$CLAUDE_PROJECT_DIR"; pwd -P; git rev-parse --show-toplevel; git worktree list
+ls -d "$(git rev-parse --show-toplevel)/.claude/worktrees" ./.claude/worktrees 2>&1
+```
+- 期待: `CLAUDE_PROJECT_DIR` と `pwd -P` がどちらも `<clone>/ルミナス`、`git worktree list` は本体の 1 行だけ、`ls` はどちらも No such file
+- 違えば: worktree ができていると、その中の `.git` を hooks が入れ子の .git として止める。`.claude/worktrees/` は根の .gitignore で除外済み（2026-10-11）なので公開はされない。worktree のオプションを切り、`git worktree list` の結果を HANDOVER に書く
+
+### 8.5 安全な置き場のずれと ps の非 ASCII（idx16。端末とアプリの Bash の両方）
+```bash
+bash -c 'echo "${LUMINOUS_SAFE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/luminous-codex}"'
+```
+- 期待: 端末とアプリで同じ（全体停止の記録の突き合わせが同じ置き場を見る）
+- 違えば: `grep -nE 'XDG_CACHE_HOME|LUMINOUS_SAFE_DIR' ~/.zshrc ~/.zprofile ~/.zshenv 2>/dev/null; launchctl getenv XDG_CACHE_HOME` で原因を探し、「安全な置き場は `LUMINOUS_SAFE_DIR` に一本化する（`XDG_CACHE_HOME` を見ない）」を次の修正の候補として HANDOVER に書く
+
+続けて、ルミナス/ で次の 2 行を実行する（末尾の `; :` は、bash が ps に置き換わって自分の行を見失うのを防ぐため）。
+```bash
+bash -c 'ps -o command= -p $$; :' x "$PWD/tools/codex_impl.sh"
+LC_ALL=C bash -c 'ps -o command= -p $$; :' x "$PWD/tools/codex_impl.sh"
+```
+- 期待: どちらも「ルミナス」がそのまま出る
+- 違えば（`?` や `\M-…` などのエスケープで出る）: `luminous_halt.sh on` が、実行中のラッパーを ps の行で見分けられず TERM を送れない（安全側。ラッパー自身が終了後に印を見て止まる）。重さを「中」に上げて HANDOVER に書く
+
+### 8.6 論理パスと実パス・大文字小文字（idx17。端末）
+```bash
+git rev-parse --show-toplevel; echo "L=$(pwd)"; echo "P=$(pwd -P)"
+```
+- L と P が違えば、`tools/scope_check.py` の `_has_git_above` を実パスで比べる修正を次の候補に入れる
+
+大文字小文字のずれを、使い捨てのフォルダで確かめる（丸括弧の中で動かすので、今のフォルダは変わらない）。
+```bash
+( T="$(mktemp -d)" && mkdir "$T/Lum" && (cd "$T/Lum" && git init -q) && cd "$T/lum" && git rev-parse --absolute-git-dir && python3 -I -S -c 'import os;print(os.path.realpath(os.path.join(os.environ["PWD"],".git")))'; cd / && rm -rf "$T" )
+```
+- 2 本のパスが `Lum` と `lum` でずれれば、`_is_real_git` を「同じファイルか」（samefile）で比べる修正を次の候補に入れる
+- `cd: …/lum: No such file or directory` と出たら、そのボリュームは大文字小文字を区別する（ずれは起きない）
+
+### 8.7 SessionEnd が発火するか（idx34。アプリ）
+デスクトップアプリでセッションを開いて 1 往復する。そのあと (a) セッションを閉じる (b) `/clear` (c) Cmd+Q でアプリを終える、をそれぞれ試し、毎回、次のセッション（または端末）で:
+```bash
+date -u; tail -n 6 state/.session-end.log
+```
+- 期待: その時刻の `--- <時刻> SessionEnd` と、sync-obsidian の行・docx の行（「最終プロンプトに変更なし」など）の両方が増えている。端末の `claude` を `/exit` で閉じた場合とも比べる
+- 違えば（(a)〜(c) のどれでも増えない）: Obsidian 同期と docx の再生成が黙って止まる。restore-charter.sh に「前回の SessionEnd の記録が無い」警告（startup のときだけ）を足す案を出す（保護ファイル。Mark の承認）
+
+### 8.8 package-lock.json の中身（idx6。Mark の決定 2 のとおりコミットする前の確認）
+```bash
+cd <clone>/ルミナス
+git status --short -- package-lock.json
+grep -m1 '"lockfileVersion"' package-lock.json
+grep -c '"resolved":' package-lock.json
+grep -c '"resolved": "https://registry.npmjs.org/' package-lock.json
+grep -c '"integrity":' package-lock.json
+grep -A2 '"node_modules/docx"' package-lock.json
+```
+- 期待: `resolved` の 2 つの数が同じ（すべて npm の公式の置き場）、`integrity` がそろっている、docx が 9.x。コミットの前は、新しいセッションの SessionStart に「!!! 注意: 憲章・権限・hooks・自走範囲に未コミットの差分」と `?? package-lock.json` が出る（コミット後は出なくなる）
+- 違えば: コミットせず、違った数を HANDOVER に書く
+
+### 8.9 （任意）直し済みの回帰の確認（idx7・12・13・15・21・35・37。端末）
+```bash
+/bin/bash scripts/test-hooks.sh 2>&1 | grep -E '^FAIL|^PASS (setup|mac:)|^---- '
+.venv/bin/python -m pytest -q tests/
+/bin/bash -c 'set -u; . tools/_codex_common.sh; n=X_NOT_SET_ANYWHERE; [ -n "${!n+x}" ] || echo ok'
+/usr/bin/perl -e 'alarm shift; exec @ARGV or exit 127' 3 /bin/sleep 10; echo "rc=$?"
+find "${TMPDIR%/}/pytest-of-$(id -un)" -flags +uchg 2>/dev/null | head
+```
+- 期待: `FAIL` の行が無く、`setup` の 3 行と「mac: restore は…」が `PASS`、最後の行が `---- N passed, 0 failed`。pytest は全件通る。`ok` と出る。`rc=142`（3 秒の alarm で止まる）。`find` の出力は空（pytest の一時フォルダに uchg の印が残っていない）
+- 違えば: 落ちた試験の名前と出力をそのまま HANDOVER に貼る（直すのは司令塔）
