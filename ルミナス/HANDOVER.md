@@ -3,6 +3,14 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-11 恒久ルール [伝]（Mark への伝え方）の書き込みと hooks・Mac の試験と LUMINOUS_PRIVATE_DIR の確認（司令塔: Claude Opus 5.5・Mac デスクトップ版）
+- Mark の指示（原文）: 「git pull して、試験 2 本を流して。そのあと LUMINOUS_PRIVATE_DIR が Claude提供用 の下の ルミナス_非公開 を指しているか確かめて。」「[1] 今後は過程の説明は不要。ボクに伝える必要がある部分だけ詳しく伝えて。これを恒久ルールとして、CLAUDE.md、ROUTINE.md、digest、Obsidian、☆ルミナス_最終プロンプト.docxなどの必要なファイルに書き込んで毎回読み込むようにしてください。hooksも活用してください。」
+- 試験（変更前）: pull は最新のまま（f30dfc2）。test-hooks 244 passed・0 failed、pytest 323 passed・4 skipped・警告 61（uchg の後始末の既知の問題）
+- LUMINOUS_PRIVATE_DIR: settings.local.json の env で、Claude提供用 の下の ルミナス_非公開 を絶対パスで指す（フォルダは実在）。この値はセッションを ルミナス/ で開いたときだけ効く
+- [伝] の書き込み: CLAUDE.md に「Mark への伝え方」節（正本）、ROUTINE §2 と §5（hooks 表）、最終プロンプト §6（docx を再生成し、非公開フォルダの写しも更新）。hooks: 新しい `.claude/hooks/tell-rule.sh` を UserPromptSubmit に登録し、restore-charter.sh が SessionStart の先頭で同じ文を出す。試験 3 件を追加し test-hooks 247 passed・0 failed
+- 保護ファイル（CLAUDE.md・ROUTINE・settings.json・hooks・最終プロンプト）の変更は Mark の指示による。次の SessionStart の「保護ファイルがコミットで変わりました」の警告はこの変更
+- 次の一手: package-lock.json の中身を確かめてコミット（決定 2）→ `docs/mac-switch-audit.md` §3・§8 → 全体停止の実地確認（0〜5）→ uchg の後始末の指示書
+
 ## 2026-10-11 監査の残り 39 件の反証と修正・Mark の決定 4 点・docx の非公開フォルダへの写し（司令塔: クラウド。Fable 5.1 → Opus 5.5）
 - Mark の指示（原文）: 「今後は過程の説明は不要。ボクに伝える必要がある部分だけ詳しく伝えて。」→ 運用プロンプト §6 に追記済み（Mark 承認）。「1はい 2はい 3はい 4見送り」（ADR `state/decisions/20261011-mac-operation-decisions.md`）。「/Users/…/ルミナス_非公開/☆ルミナス_最終プロンプト.docx にも最終プロンプトを入れておいてください」
 - 状態: 監査の残り 39 件（利用枠の上限で未反証だったもの）を現行コードで反証 → 今も起きる 16・文書 6・Mac のみ 7・直り済み 8・誤り 2。Mark の判断が要らない 17 件を修正し、Opus の審査 2 視点（各 1 回差し戻し → 反映 → APPROVE）。試験 hooks 244 件・pytest 325 件通過（2 件は Mac 専用で skip）

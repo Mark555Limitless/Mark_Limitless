@@ -24,6 +24,8 @@ fi
 
 emit() {
 echo "=== ルミナス憲章の復元（SessionStart hook / session ${SID}） ==="
+# Mark への伝え方 [伝]（恒久。UserPromptSubmit でも毎回注入する）
+bash "$ROOT/.claude/hooks/tell-rule.sh" 2>/dev/null
 # git を使う前に、入れ子の .git が無いことを git を使わずに確かめる（.git の設定に仕込まれたコマンドを走らせないため）
 NESTED="$(hook_nested_git)"
 # 本命の鍵の検査（.githooks の pre-commit / pre-push）が効いているかを最初に見る。core.hooksPath は .git/config にあって clone に引き継がれないので、

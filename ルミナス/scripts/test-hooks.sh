@@ -81,6 +81,11 @@ bash -c "printf '%s' '$SID' | bash '$R/.claude/hooks/restore-charter.sh'" | grep
 bash -c "printf '%s' '$SID' | bash '$R/.claude/hooks/restore-charter.sh'" | grep -q '## 4\.' && ok "restore: 禁止事項（§4）も注入" || ng "restore: §4 注入"
 LC_ALL=C bash -c "printf '%s' '$SID' | bash '$R/.claude/hooks/restore-charter.sh'" | python3 -c 'import sys; sys.stdin.buffer.read().decode("utf-8")' 2>/dev/null && ok "restore: C ロケールでも UTF-8 を壊さない" || ng "restore: UTF-8 が壊れている"
 [ "$(bash -c "printf '%s' '$SID' | bash '$R/.claude/hooks/restore-charter.sh'" | python3 -c 'import sys; print(len(sys.stdin.buffer.read().decode("utf-8","replace")))')" -le 8700 ] && ok "restore: 注入量が上限内" || ng "restore: 注入量が上限超え"
+# Mark への伝え方 [伝]（Mark の指示 2026-10-11・恒久）: SessionStart の先頭と UserPromptSubmit で毎回注入する
+bash -c "printf '%s' '$SID' | bash '$R/.claude/hooks/restore-charter.sh'" | head -n 4 | grep -q '^\[伝\] Mark への伝え方' && ok "restore: [伝] を先頭で注入" || ng "restore: [伝] の注入"
+OUT="$(printf '%s' '{"session_id":"test-1","prompt":"x"}' | bash "$R/.claude/hooks/tell-rule.sh")"; RC=$?
+[ "$RC" = 0 ] && printf '%s' "$OUT" | grep -q '過程の説明は書かない' && printf '%s' "$OUT" | grep -q '省略せず' && ok "tell-rule: [伝] を注入 (exit $RC)" || ng "tell-rule: [伝] (exit ${RC})"
+python3 -c 'import json,sys; h=json.load(open(sys.argv[1]))["hooks"]["UserPromptSubmit"]; assert any("tell-rule.sh" in x["command"] for e in h for x in e["hooks"])' "$R/.claude/settings.json" 2>/dev/null && ok "settings: UserPromptSubmit に tell-rule.sh" || ng "settings: UserPromptSubmit の登録"
 sleep 1
 OUT="$(printf '%s' '{"session_id":"test-1","stop_hook_active":false}' | bash "$R/.claude/hooks/stop-gate.sh")"
 printf '%s' "$OUT" | grep -q '"block"' && ok "stop-gate: 未更新ならブロック" || ng "stop-gate: 未更新ならブロック"

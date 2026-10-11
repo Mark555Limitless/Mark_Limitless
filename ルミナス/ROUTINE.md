@@ -26,6 +26,7 @@
 
 ## 2. 作業中の手順
 
+- **[伝] Mark への伝え方（Mark の指示 2026-10-11・恒久）**: 過程の説明は書かない（実況・手順の説明・やり直しの経緯なし。途中で書くのは判断・確認が要るとき、重大な問題、状況の一言を求められたときだけ）。結果・Mark の判断や操作が要ること・知らないと困ること（失敗・未完了・誤り・費用・外から見える影響）だけを、省略せず具体的に書く。正本は `CLAUDE.md`「Mark への伝え方」。hooks（SessionStart の先頭・UserPromptSubmit）が毎回注入する
 - 文書・設定・コードを作ったら `luminous-reviewer`（Sonnet）に審査させる。重大な論点が残れば Opus へ上げる
 - 事実を書くときは出典と信頼度（①〜⑤）を添える。自己申告ベンチは「自己申告」と書く
 - 判断を下したら `state/decisions/YYYYMMDD-題.md`（ADR）に 5 行で残す（背景・選択肢・決定・理由・影響）
@@ -56,6 +57,7 @@
 | イベント | スクリプト | 役割 |
 |---|---|---|
 | SessionStart (startup/resume/clear/compact/fork) | `.claude/hooks/restore-charter.sh` | 憲章 §1-2-4・VIRTUAL_MARK §3・ROUTINE §1・HANDOVER.md の最新の節・最新 digest・Obsidian「最新」・最終プロンプト冒頭を注入（過去の記録は「データ」と明示）。保護ファイルの未承認差分を警告。開始時刻を `state/.sessions/<id>.start` に記録 |
+| UserPromptSubmit | `.claude/hooks/tell-rule.sh` | Mark への伝え方 [伝]（過程の説明は書かず、伝える必要がある部分だけを詳しく）を Mark の発言ごとに注入する。SessionStart でも restore-charter.sh が先頭で同じ文を出す |
 | PreToolUse（すべての道具 `*`） | `.claude/hooks/halt-guard.sh` | 全体停止の印（`data/.luminous_halt`）があれば、読むだけの道具（Read・Grep・Glob）と TaskStop・AskUserQuestion 以外を止める。印は `bash tools/luminous_halt.sh on 理由` で誰でも付けられ、消すのは Mark が端末で `off`。印が無くても `true luminous-hook-canary` だけは常に断る（hooks が効いているかの確認用）。**終了の関門を外す `LUMINOUS_STOP_GATE=off` とは別物**（あちらは記録の催促を外すだけで、作業は止めない）。仕様: `docs/specs/20261008_global_halt.md` |
 | PreToolUse (Edit/Write) | `.claude/hooks/codex-lock-guard.sh` | Codex の実行中（`data/codex_runs/.lock` の持ち主が生きている）は、このフォルダ内の編集を止める（実行中の編集は範囲検査で違反になる） |
 | PreToolUse (Bash) | `.claude/hooks/guard-protected.sh` | 保護ファイルへの Bash 書き込み、鍵ファイルの Bash 読み取り、`--no-verify`・`core.hooksPath` の変更を止める |
