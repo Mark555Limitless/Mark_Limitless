@@ -31,3 +31,6 @@
 2026-10-11T11:01:58Z | uchg の後始末の差分のコード審査 | claude-opus-5-5 | claude-opus-5-5（Agent・model 明示） | コード審査は Opus（CLAUDE.md） | APPROVE（軽 3 件。1 件を 1 行で反映、2 件は次に）
 2026-10-11T16:11:02Z | SessionEnd の試験用セッション（PostModelSwitch の実地確認 §3-7 (d)） | claude-haiku-5-5 | claude-sonnet-5-5 | 司令塔がアプリの機能で試験用セッションのモデルを切り替え、機械記入の行が増えるかを確かめた（実作業には使っていない） | 機械記入の行が即時に 1 行増えた（期待どおり）
 2026-10-11T23:08:16Z | Mac の実地確認の 2 つの修正（ps のロケール・samefile）のコード審査 | claude-opus-5-5 | claude-opus-5-5（Agent・model 明示） | コード審査は Opus（CLAUDE.md） | APPROVE（重・中なし、軽 6 件は次に）
+2026-10-14T15:03:48Z | 試作版の最初の作業のための調査と Luna との壁打ち | claude-opus-5-5 | claude-sonnet-5-5 | Mark が /model で明示指定。集める作業（Web 調査 6 本）は Sonnet のサブエージェントに任せ、統合と壁打ちは司令塔 | 調査 9 本（Sonnet 8＋Opus の照合 1）・Luna との壁打ち 10 往復を完了。照合で一部不一致 5/13（38.5%）。最終提案を作成（コミットなし）
+2026-10-14T16:38:07Z | Astra（Mark の Codex スレッド）との壁打ち 3 往復 | claude-sonnet-5-5 | claude-fable-5 | Mark が /model で明示指定（設計の根幹の議論のため司令塔の最上位モデルへ） | 3 往復完了。完成条件 4→6・版の 3 区分・承認失効の最小規則を追加。Luna の 10 往復と矛盾なし
+2026-10-14T16:51:28Z | 素体の開発開始（P1・P2・P4 の指示書と実装） | claude-fable-5 | claude-opus-5-5 | Mark が /model で明示指定 | 継続中
