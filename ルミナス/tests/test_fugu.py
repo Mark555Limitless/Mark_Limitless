@@ -50,7 +50,7 @@ def test_success_and_accounting(setup, isolated_env):
     assert all(secret not in json.dumps(rows) for secret in ("prompt-private", "answer-private", "test-only-credential"))
 
 
-@pytest.mark.parametrize("label", [None, "C"])
+@pytest.mark.parametrize("label", [None, "B", "C"])
 def test_class_denied(setup, label):
     assert fugu.generate("hello", data_class=label).reason == "data_class_denied"
     setup[1].post.assert_not_called()
@@ -98,13 +98,15 @@ def test_http(setup, code, reason, usd):
 
 
 @pytest.mark.parametrize("kind,reason", [("filter", "安全フィルタ"), ("empty", "空応答"),
-    ("json", "解析失敗"), ("malformed", "解析失敗")])
+    ("null", "空応答"), ("json", "解析失敗"), ("malformed", "解析失敗")])
 def test_content(setup, kind, reason):
     payload = copy.deepcopy(OK)
     if kind == "filter":
         payload["choices"][0]["finish_reason"] = "content_filter"
     elif kind == "empty":
         payload["choices"][0]["message"]["content"] = " "
+    elif kind == "null":
+        payload["choices"][0]["message"]["content"] = None
     elif kind == "json":
         payload = None
     else:
@@ -197,10 +199,10 @@ def test_logging_failure_does_not_escape(setup, monkeypatch):
     ({"prompt_tokens": 1000, "completion_tokens": 500,
       "completion_tokens_details": {"reasoning_tokens": 200}}, 0.005),
     ({"prompt_tokens": 1000, "completion_tokens": 500,
-      "token_details": {"adjustment_tokens": 100}}, 0.0056),
+      "token_details": {"orchestration_output_tokens": 100}}, 0.0056),
     ({"prompt_tokens": "1000", "completion_tokens": 500}, 0.05),
     ({"prompt_tokens": 1000, "completion_tokens": 500,
-      "token_details": {"unknown": 100}}, 0.05),
+      "token_details": {"unknown": 100}}, 0.005),
 ])
 def test_usage(setup, md, expected):
     payload = copy.deepcopy(OK)
@@ -234,4 +236,137 @@ def test_requests_timeout(setup):
 def test_cap_includes_utf8_and_web_allowance(setup, monkeypatch):
     monkeypatch.setenv("ORCH_FUGU_DAILY_USD_CAP", "0.021011")
     assert fugu.generate("あ", data_class="A", max_output_tokens=1).reason == "上限到達"
+    setup[1].post.assert_not_called()
+
+
+def test_halt_immediately_before_gate(setup, monkeypatch):
+    halt = Mock(side_effect=[False, False, True])
+    gate_call = Mock()
+    monkeypatch.setattr(config, "global_halt", halt)
+    monkeypatch.setattr(gate, "gate", gate_call)
+    with pytest.raises(config.GlobalHalt):
+        fugu.generate("hello", data_class="A")
+    gate_call.assert_not_called()
+    setup[1].post.assert_not_called()
+
+
+def test_entry_cli_forwarding(setup, monkeypatch):
+    roster = json.loads(setup[0].read_text())
+    roster["entries"][0].update(id="other-fugu", model="other-model")
+    setup[0].write_text(json.dumps(roster))
+    monkeypatch.setattr("sys.stdin", io.StringIO("hello"))
+    assert fugu.main(["gen", "--entry", "other-fugu", "--data-class", "A"]) == 0
+    assert setup[1].post.call_args.kwargs["json"]["model"] == "other-model"
+
+
+@pytest.mark.parametrize("quiet,expected", [(False, 2), (True, 0)])
+def test_failed_check_exit_code(setup, quiet, expected):
+    setup[1].get.return_value = FakeResp(401)
+    assert fugu.main(["check"] + (["--quiet"] if quiet else [])) == expected
+
+
+@pytest.mark.parametrize("style", ["chat", "responses", "token_details"])
+def test_orchestration_counts_and_accounting(setup, isolated_env, style):
+    inp = {"cached_tokens": 400, "orchestration_input_tokens": 200,
+           "orchestration_input_cached_tokens": 100}
+    out = {"reasoning_tokens": 300, "orchestration_output_tokens": 50}
+    md = {"prompt_tokens": 1000, "completion_tokens": 500}
+    if style == "chat":
+        md.update(prompt_tokens_details=inp, completion_tokens_details=out)
+    elif style == "responses":
+        md = {"input_tokens": 1000, "output_tokens": 500,
+              "input_tokens_details": inp, "output_tokens_details": out}
+    else:
+        md["token_details"] = dict(inp, **out)
+    payload = copy.deepcopy(OK)
+    payload["usage"] = md
+    setup[1].post.return_value = FakeResp(200, payload)
+    res = fugu.generate("hello", data_class="A")
+    assert res.usd == pytest.approx(0.0059)
+    row = read_ledger(isolated_env)[0]
+    assert (row["in_tokens"], row["out_tokens"]) == (1300, 550)
+    assert row["usd"] == pytest.approx(res.usd)
+
+
+@pytest.mark.parametrize("kind", [
+    "missing", "timeout", "requests_timeout", "communication", "5xx",
+    "json", "non_dict", "malformed", "unknown_chat", "unknown_responses",
+    "unknown_generic",
+])
+def test_unknown_usage_uses_estimate_for_both_ledgers(setup, isolated_env, monkeypatch, kind):
+    # 長い UTF-8 入力で見込み額を $0.05 より大きくし、固定額への退行を検出する。
+    prompt = "あ" * 6000
+    estimate = (len(prompt.encode("utf-8")) * 2 + 2048 * 6) / 1_000_000 + 0.007 * 3
+    payload = copy.deepcopy(OK)
+    if kind == "missing":
+        payload.pop("usage")
+    elif kind.startswith("unknown_"):
+        detail = {"unknown_chat": "prompt_tokens_details",
+                  "unknown_responses": "output_tokens_details",
+                  "unknown_generic": "token_details"}[kind]
+        payload["usage"][detail] = {"new_orchestration_tokens": 1}
+    elif kind == "malformed":
+        payload["choices"] = [42]
+    elif kind == "non_dict":
+        payload = []
+    elif kind == "json":
+        payload = None
+    setup[1].post.return_value = FakeResp(503 if kind == "5xx" else 200, payload)
+    errors = {"timeout": TimeoutError, "requests_timeout": fugu.RequestsTimeout,
+              "communication": RuntimeError}
+    if kind in errors:
+        setup[1].post.side_effect = errors[kind]()
+    # autospec 相当の束縛を維持し、実際の台帳更新も検証する。
+    original = gate.Budget.settle
+    calls = []
+    def capture(self, *args):
+        calls.append(args)
+        return original(self, *args)
+    monkeypatch.setattr(gate.Budget, "settle", capture)
+    res = fugu.generate(prompt, data_class="A")
+    assert estimate > fugu.UNKNOWN_USAGE_USD
+    assert res.usd == pytest.approx(estimate)
+    assert read_ledger(isolated_env)[0]["usd"] == pytest.approx(estimate)
+    assert len(calls) == 1 and calls[0][1] == pytest.approx(estimate)
+    rows = [json.loads(line) for line in
+            (isolated_env / "data" / "gate_ledger.jsonl").read_text().splitlines()]
+    assert any(row.get("kind") == "settle" for row in rows)
+
+
+@pytest.mark.parametrize("value", [-1, 1.5, "1", True, None])
+@pytest.mark.parametrize("name", ["orchestration_input_tokens",
+                                 "orchestration_input_cached_tokens",
+                                 "orchestration_output_tokens"])
+def test_invalid_orchestration_value(setup, value, name):
+    md = dict(OK["usage"], token_details={name: value})
+    with pytest.raises(ValueError, match="invalid_usage"):
+        fugu._counts(md)
+
+
+@pytest.mark.parametrize("value", [-1, 1.5, "1", True, None])
+@pytest.mark.parametrize("name", ["input_tokens", "output_tokens"])
+def test_invalid_responses_counts(setup, value, name):
+    md = {"input_tokens": 1, "output_tokens": 1}
+    md[name] = value
+    with pytest.raises(ValueError, match="invalid_usage"):
+        fugu._counts(md)
+
+
+def test_chat_counts_take_precedence(setup):
+    assert fugu._counts({"prompt_tokens": 1, "completion_tokens": 2,
+                         "input_tokens": 10, "output_tokens": 20}) == (1, 2)
+
+
+@pytest.mark.parametrize("prompt", [None, 123, [], {}, b"hello"])
+def test_non_string_prompt(setup, isolated_env, prompt):
+    res = fugu.generate(prompt, data_class="A")
+    assert (res.rc, res.reason, res.usd) == (2, "入力不正", 0)
+    assert read_ledger(isolated_env)[0]["calls"] == 0
+    setup[1].post.assert_not_called()
+
+
+def test_daily_usage_read_failure(setup, monkeypatch):
+    monkeypatch.setattr(fugu, "daily_usd", Mock(side_effect=OSError))
+    res = fugu.generate("hello", data_class="A")
+    assert (res.rc, res.reason, res.usd) == (2, "上限到達", 0)
     setup[1].post.assert_not_called()

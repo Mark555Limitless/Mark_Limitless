@@ -1,5 +1,9 @@
 """Mark の指示による実測専用の Fugu アダプター。
 Fugu に自身の構成・振り分け方を尋ねる用途に使わない（規約）。
+一次情報 console.sakana.ai/models（指示書で 2026-10-15 確認）では、
+調整用トークンは入出力と別計上・同単価（Chat 形式の詳細名は未確認）。
+記録する実額に Web 道具の料金（1 回 $0.007）は含まれない（応答に回数が無いため）。
+見込み額には 3 回分を含める。
 """
 from __future__ import annotations
 
@@ -29,7 +33,7 @@ except ImportError:
 from . import config, gate, usage
 
 ROLE = "外部オーケストレーターの実測"
-UNKNOWN_USAGE_USD = 0.05  # 使用量が分からない応答・通信例外は控えめにこの額を計上する
+UNKNOWN_USAGE_USD = 0.05  # 使用量不明時の最低計上額。送信前の見込み額が高ければそちらを使う
 REQUESTS_MISSING = "requests 未導入"  # 呼ばなかった（回数・費用に数えない）
 
 
@@ -63,21 +67,34 @@ def _int(value):
 
 
 def _counts(md):
-    prompt, completion = md.get("prompt_tokens"), md.get("completion_tokens")
+    prompt = md.get("prompt_tokens", md.get("input_tokens"))
+    completion = md.get("completion_tokens", md.get("output_tokens"))
     if any(type(v) is not int or v < 0 for v in (prompt, completion)):
         raise ValueError("invalid_usage")
-    # reasoning_tokens は completion_tokens の内数。調整用トークンだけ加算する。
-    details = md.get("token_details", {})
-    if not isinstance(details, dict):
-        raise ValueError("invalid_usage")
-    adjustment = 0
-    for name, value in details.items():
-        if name not in ("adjustment_tokens", "adjusted_tokens", "orchestration_tokens"):
-            raise ValueError("unknown_token_details")
-        if type(value) is not int or value < 0:
+    input_names = {"orchestration_input_tokens", "orchestration_input_cached_tokens"}
+    output_names = {"orchestration_output_tokens"}
+    # reasoning_tokens・cached_tokens は内数なので二重計上しない。
+    for details, allowed in (
+        (md.get("prompt_tokens_details", md.get("input_tokens_details")), input_names),
+        (md.get("completion_tokens_details", md.get("output_tokens_details")), output_names),
+        (md.get("token_details"), input_names | output_names),
+    ):
+        if details is None:
+            continue
+        if not isinstance(details, dict):
             raise ValueError("invalid_usage")
-        adjustment += value
-    return prompt, completion + adjustment
+        for name, value in details.items():
+            if "orchestration" not in name:
+                continue
+            if name not in allowed:
+                raise ValueError("unknown_token_details")
+            if type(value) is not int or value < 0:
+                raise ValueError("invalid_usage")
+            if name in input_names:
+                prompt += value
+            else:
+                completion += value
+    return prompt, completion
 
 
 def cost_from_usage(md, entry=None):
@@ -144,31 +161,31 @@ def _log(model: str, res: Result, sec: float, usd: float, purpose: str, *, skipp
         pass
 
 
-def _parse(data, entry=None):
+def _parse(data, entry=None, unknown_usd=UNKNOWN_USAGE_USD):
     if not isinstance(data, dict):
-        return Result(3, "解析失敗"), UNKNOWN_USAGE_USD
+        return Result(3, "解析失敗"), unknown_usd
     md = data.get("usage")
     md = md if isinstance(md, dict) else {}
     try:
         usd = cost_from_usage(md, entry)
     except (ValueError, TypeError, KeyError):
-        usd = UNKNOWN_USAGE_USD
+        usd = unknown_usd
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
         return Result(3, "空応答", usage=md), usd
     choice = choices[0]
     if not isinstance(choice, dict):
-        return Result(3, "解析失敗", usage=md), usd
+        return Result(3, "解析失敗", usage=md), max(usd, unknown_usd)
     if choice.get("finish_reason") == "content_filter":
         return Result(3, "安全フィルタ", usage=md), usd
     message = choice.get("message")
     if not isinstance(message, dict):
-        return Result(3, "解析失敗", usage=md), usd
+        return Result(3, "解析失敗", usage=md), max(usd, unknown_usd)
     text = message.get("content")
     if text is None or isinstance(text, str) and not text.strip():
         return Result(3, "空応答", usage=md), usd
     if not isinstance(text, str):
-        return Result(3, "解析失敗", usage=md), usd
+        return Result(3, "解析失敗", usage=md), max(usd, unknown_usd)
     return Result(0, "ok", text=text, usage=md), usd
 
 
@@ -184,6 +201,8 @@ def generate(prompt: str, *, entry_id: str = "sakana-fugu-max",
         _log(m, res, res.sec, usd, purpose, skipped=skipped)
         return res
 
+    if not isinstance(prompt, str):
+        return finish(Result(2, "入力不正"), skipped=True)
     if config.global_halt():
         finish(Result(config.HALT_EXIT_CODE, "全体停止中"))
         raise config.GlobalHalt()
@@ -208,7 +227,11 @@ def generate(prompt: str, *, entry_id: str = "sakana-fugu-max",
             raise gate.GateDenied("invalid_timeout")
         estimate = (len(prompt.encode("utf-8")) * price["input"] +
                     max_output_tokens * price["output"]) / 1_000_000 + 0.007 * 3
-        if daily_usd() + estimate > daily_cap():
+        try:
+            spent = daily_usd()
+        except Exception:
+            return finish(Result(2, "上限到達"))
+        if not math.isfinite(spent) or spent + estimate > daily_cap():
             return finish(Result(2, "上限到達"))
         if requests is None:
             return finish(Result(2, REQUESTS_MISSING))
@@ -226,7 +249,8 @@ def generate(prompt: str, *, entry_id: str = "sakana-fugu-max",
                                 max_output_tokens, task)
     except gate.GateDenied as error:
         return finish(Result(2, error.reason), skipped=True)
-    usd, tokens = UNKNOWN_USAGE_USD, reservation["reserved_tokens"]
+    unknown_usd = max(UNKNOWN_USAGE_USD, estimate)
+    usd, tokens = unknown_usd, reservation["reserved_tokens"]
     res = Result(2, "通信失敗")
     try:
         wait = float(timeout)
@@ -236,7 +260,7 @@ def generate(prompt: str, *, entry_id: str = "sakana-fugu-max",
             raise TimeoutError()
         resp = _post_with_timeout(url, {"Authorization": f"Bearer {key}",
                                        "Content-Type": "application/json"}, body, wait)
-        res, usd = _response(resp, entry)
+        res, usd = _response(resp, entry, unknown_usd)
         try:
             tokens = sum(_counts(res.usage))
         except ValueError:
@@ -258,20 +282,20 @@ def generate(prompt: str, *, entry_id: str = "sakana-fugu-max",
     return finish(res, usd)
 
 
-def _response(resp, entry) -> Tuple[Result, float]:
+def _response(resp, entry, unknown_usd=UNKNOWN_USAGE_USD) -> Tuple[Result, float]:
     code = getattr(resp, "status_code", 0)
     if code in (401, 403):
         return Result(2, "未認証"), 0.0
     if code == 429:
         return Result(2, "上限到達(429)"), 0.0
     if code >= 500:
-        return Result(2, "API障害"), UNKNOWN_USAGE_USD
+        return Result(2, "API障害"), unknown_usd
     if code != 200:
         return Result(2, f"API障害(HTTP {code})"), 0.0
     try:
-        return _parse(resp.json(), entry)
+        return _parse(resp.json(), entry, unknown_usd)
     except Exception:
-        return Result(3, "解析失敗"), UNKNOWN_USAGE_USD
+        return Result(3, "解析失敗"), unknown_usd
 
 
 def check_status(*, net: bool = True, net_timeout: float = 20) -> Tuple[bool, str]:
