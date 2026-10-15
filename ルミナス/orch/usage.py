@@ -36,7 +36,11 @@ def record(
     status: str = "ok",
     ms: int = 0,
     extra: Optional[Dict[str, Any]] = None,
+    served_model: str = "",
+    unknown: bool = False,
 ) -> Dict[str, Any]:
+    """served_model: 応答に含まれていた実行時のモデル ID（名簿の alias と突き合わせる）。
+    unknown: 実費が分からず控えめな額（見込み額以上）を計上した行。1 日 2 回でその行を照合まで止める（第 4 往復の合意 2026-10-16）。"""
     if vendor not in VENDORS:
         raise ValueError(f"unknown vendor: {vendor}")
     if status not in STATUSES:
@@ -53,6 +57,10 @@ def record(
         "status": status,
         "ms": int(ms or 0),
     }
+    if served_model:
+        row["served"] = config.redact(str(served_model))[:80]
+    if unknown:
+        row["unknown"] = True
     if extra:
         for k, v in extra.items():
             row[k] = config.redact(v) if isinstance(v, str) else v
@@ -125,6 +133,19 @@ def today_usd(vendor: str) -> float:
 
 def today_calls(vendor: str) -> int:
     return int(_sum(vendor, _start_of_today(), "calls"))
+
+
+def today_unknown(vendor: str) -> int:
+    """当日、実費が分からず控えめな額を計上した失敗の回数（status=error かつ unknown=True）。"""
+    since = _start_of_today()
+    n = 0
+    for row in iter_rows():
+        if row.get("vendor") != vendor or row.get("status") != "error" or row.get("unknown") is not True:
+            continue
+        dt = _parse_ts(row.get("ts", ""))
+        if dt is not None and dt >= since:
+            n += 1
+    return n
 
 
 def month_usd(vendor: str) -> float:

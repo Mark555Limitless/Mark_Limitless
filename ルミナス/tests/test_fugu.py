@@ -370,3 +370,73 @@ def test_daily_usage_read_failure(setup, monkeypatch):
     res = fugu.generate("hello", data_class="A")
     assert (res.rc, res.reason, res.usd) == (2, "上限到達", 0)
     setup[1].post.assert_not_called()
+
+
+# --- 第 4 往復の合意（2026-10-16）: 実行時モデル ID・要照合・unknown の記録 ---
+@pytest.mark.parametrize("served,ok", [("fugu-max", True), ("fugu-max-v1.0", True), ("fugu-max-20260615", True), (None, True),
+                                       ("fugu-ultra-v2.0", False), ("fugu-max-lite", False), ("fugu-maxi", False),
+                                       ("fugu-max-8b-001", False)])
+def test_served_model_prefix_match(setup, isolated_env, served, ok):
+    body = copy.deepcopy(OK)
+    if served is not None:
+        body["model"] = served
+    setup[1].post.return_value = FakeResp(200, body)
+    res = fugu.generate("hello", data_class="A")
+    if ok:
+        assert res.rc == 0 and res.served == (served or "")
+    else:
+        assert (res.rc, res.reason, res.text) == (2, "served_model_mismatch", "")
+        assert res.usd == pytest.approx(0.005)  # 費用は実額
+    assert setup[1].post.call_count == 1
+    rows = read_ledger(isolated_env)
+    assert rows[-1].get("served", "") == (served or "")
+    assert f"served={served or '-'}" in (isolated_env / "logs" / "fugu.log").read_text()
+
+
+@pytest.mark.parametrize("mode", ["timeout", "500", "no_usage", "not_dict", "bad_choice"])
+def test_unknown_flag_recorded(setup, isolated_env, monkeypatch, mode):
+    if mode == "not_dict":
+        setup[1].post.return_value = FakeResp(200, [])
+    elif mode == "bad_choice":  # 使用量は読めるが本文の形が崩れている→控えめな額＋印
+        setup[1].post.return_value = FakeResp(200, {"choices": ["x"], "usage": OK["usage"]})
+    elif mode == "timeout":
+        monkeypatch.setattr(fugu, "_post_with_timeout", lambda *a, **k: (_ for _ in ()).throw(TimeoutError()))
+    elif mode == "500":
+        setup[1].post.return_value = FakeResp(500, {})
+    else:
+        setup[1].post.return_value = FakeResp(200, {"choices": [{"message": {"content": "x"}}]})
+    res = fugu.generate("hello", data_class="A")
+    assert res.unknown is True
+    rows = read_ledger(isolated_env)
+    if res.rc == 0:
+        assert "unknown" not in rows[-1]  # 成功は要照合の回数に数えない（費用は控えめな額）
+        assert res.usd >= fugu.UNKNOWN_USAGE_USD
+    else:
+        assert rows[-1]["unknown"] is True and rows[-1]["status"] == "error"
+
+
+def test_reconcile_stop_after_two_unknown(setup, isolated_env, monkeypatch):
+    for _ in range(2):
+        usage.record("fugu", usd=0.05, status="error", unknown=True)
+    res = fugu.generate("hello", data_class="A")
+    assert (res.rc, res.reason) == (2, "要照合")
+    setup[1].post.assert_not_called()
+    ok, line = fugu.check_status(net=False)
+    assert not ok and "要照合" in line
+    monkeypatch.setenv("ORCH_FUGU_RECONCILED", "1")
+    assert fugu.generate("hello", data_class="A").rc == 0
+
+
+def test_served_value_is_sanitized_in_log(setup, isolated_env):
+    body = copy.deepcopy(OK); body["model"] = "fugu-max\nrc=0\tx"
+    setup[1].post.return_value = FakeResp(200, body)
+    res = fugu.generate("hello", data_class="A")
+    assert res.served == "fugu-maxrc0x" and res.rc == 2
+    log = (isolated_env / "logs" / "fugu.log").read_text()
+    assert len(log.splitlines()) == 1 and "served=fugu-maxrc0x" in log
+
+
+def test_unreadable_ledger_stops(setup, monkeypatch):
+    monkeypatch.setattr(usage, "today_unknown", lambda v: (_ for _ in ()).throw(OSError()))
+    assert fugu.generate("hello", data_class="A").reason == "要照合"
+    setup[1].post.assert_not_called()

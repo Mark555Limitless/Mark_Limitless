@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import uuid
 import sys
 import threading
@@ -45,6 +46,8 @@ class Result:
     usage: Dict[str, Any] = field(default_factory=dict)
     sec: float = 0.0
     usd: float = 0.0
+    served: str = ""      # 応答に含まれていた実行時のモデル ID（無ければ空）
+    unknown: bool = False  # 実費が分からず、見込み額以上の控えめな額を計上した
 
 
 def _roster(entry_id="sakana-fugu-max"):
@@ -107,6 +110,32 @@ def daily_usd() -> float:
     return usage.today_usd("fugu")
 
 
+def _needs_reconcile() -> bool:
+    """同じ接続先で実費不明が 1 日 2 回以上なら、請求画面との照合が済むまで止める（第 4 往復の合意 A）。
+    Mark が照合したら ORCH_FUGU_RECONCILED=1 で解除（日付が変われば自然に解除）。台帳が読めなければ止める側（fail-closed）。"""
+    if config.env("ORCH_FUGU_RECONCILED") == "1":
+        return False
+    try:
+        return usage.today_unknown("fugu") >= 2
+    except Exception:
+        return True
+
+
+def _clean_served(value) -> str:
+    """応答の実行時モデル ID。外部から来る値なので、許す文字だけ残して 80 字に切る（記録の 1 行に改行やタブを差し込ませない）。"""
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"[^A-Za-z0-9._:/@-]", "", value)[:80]
+
+
+def _served_matches(served: str, model: str) -> bool:
+    """名簿の alias と実行時のモデル ID の照合。等しいか、alias の後ろが「-数字…」「-v数字…」の版の表記だけなら一致
+    （`gemini-3.8-flash-001`・`fugu-max-v1.0`・`fugu-max-20260615` は一致、`gemini-3.8-flash-lite-001`・`gemini-3.8-flash-8b-001` は不一致）。空は一致扱い。"""
+    if not served:
+        return True
+    return re.match(r"^" + re.escape(model) + r"(-v?\d+(\.\d+)*)?$", served) is not None
+
+
 def daily_cap() -> float:
     cap = config.env_float("ORCH_FUGU_DAILY_USD_CAP", 0.25)
     return cap if math.isfinite(cap) and cap >= 0 else 0.0
@@ -144,7 +173,7 @@ def _log(model: str, res: Result, sec: float, usd: float, purpose: str, *, skipp
     try:
         line = (
             f"{config.ts()}\tmodel={model}\trc={res.rc}\tsec={sec:.1f}\tchars={len(res.text)}"
-            f"\tin={tin}\tout={tout}\tusd={usd:.6f}\treason={res.reason}"
+            f"\tin={tin}\tout={tout}\tusd={usd:.6f}\tserved={res.served or '-'}\treason={res.reason}"
         )
         path = config.log_dir() / "fugu.log"
         with config.file_lock(path.with_suffix(".lock")):
@@ -156,37 +185,45 @@ def _log(model: str, res: Result, sec: float, usd: float, purpose: str, *, skipp
     try:
         usage.record("fugu", model=model, purpose=purpose, calls=0 if status == "skip" else 1,
                      in_tokens=tin, out_tokens=tout, usd=usd, status=status, ms=int(sec * 1000),
-                     extra={"rc": res.rc, "sec": sec, "chars": len(res.text), "reason": res.reason})
+                     extra={"rc": res.rc, "sec": sec, "chars": len(res.text), "reason": res.reason},
+                     served_model=res.served, unknown=bool(res.unknown and status == "error"))
     except Exception:
         pass
 
 
 def _parse(data, entry=None, unknown_usd=UNKNOWN_USAGE_USD):
     if not isinstance(data, dict):
-        return Result(3, "解析失敗"), unknown_usd
+        return Result(3, "解析失敗", unknown=True), unknown_usd
     md = data.get("usage")
     md = md if isinstance(md, dict) else {}
+    served = _clean_served(data.get("model"))
+    unknown = False
     try:
         usd = cost_from_usage(md, entry)
     except (ValueError, TypeError, KeyError):
-        usd = unknown_usd
+        usd, unknown = unknown_usd, True
+
+    def r(rc, reason, text="", conservative=False):
+        # conservative: 使用量は読めたが本文の形が崩れ、控えめな額（max(実額, 見込み額)）で計上する→「実費不明」の印を付ける
+        return Result(rc, reason, text=text, usage=md, served=served, unknown=unknown or conservative)
+
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
-        return Result(3, "空応答", usage=md), usd
+        return r(3, "空応答"), usd
     choice = choices[0]
     if not isinstance(choice, dict):
-        return Result(3, "解析失敗", usage=md), max(usd, unknown_usd)
+        return r(3, "解析失敗", conservative=True), max(usd, unknown_usd)
     if choice.get("finish_reason") == "content_filter":
-        return Result(3, "安全フィルタ", usage=md), usd
+        return r(3, "安全フィルタ"), usd
     message = choice.get("message")
     if not isinstance(message, dict):
-        return Result(3, "解析失敗", usage=md), max(usd, unknown_usd)
+        return r(3, "解析失敗", conservative=True), max(usd, unknown_usd)
     text = message.get("content")
     if text is None or isinstance(text, str) and not text.strip():
-        return Result(3, "空応答", usage=md), usd
+        return r(3, "空応答"), usd
     if not isinstance(text, str):
-        return Result(3, "解析失敗", usage=md), max(usd, unknown_usd)
-    return Result(0, "ok", text=text, usage=md), usd
+        return r(3, "解析失敗", conservative=True), max(usd, unknown_usd)
+    return r(0, "ok", text), usd
 
 
 def generate(prompt: str, *, entry_id: str = "sakana-fugu-max",
@@ -211,6 +248,8 @@ def generate(prompt: str, *, entry_id: str = "sakana-fugu-max",
     key = config.env("SAKANA_API_KEY")
     if not key:
         return finish(Result(2, "鍵なし"))
+    if _needs_reconcile():
+        return finish(Result(2, "要照合"), skipped=True)
     try:
         roster_path, entry = _roster(entry_id)
         if model is not None and model != entry["model"]:
@@ -251,7 +290,7 @@ def generate(prompt: str, *, entry_id: str = "sakana-fugu-max",
         return finish(Result(2, error.reason), skipped=True)
     unknown_usd = max(UNKNOWN_USAGE_USD, estimate)
     usd, tokens = unknown_usd, reservation["reserved_tokens"]
-    res = Result(2, "通信失敗")
+    res = Result(2, "通信失敗", unknown=True)
     try:
         wait = float(timeout)
         if reservation["deadline"] is not None:
@@ -266,10 +305,13 @@ def generate(prompt: str, *, entry_id: str = "sakana-fugu-max",
         except ValueError:
             if usd == 0:
                 tokens = 0
+        if not _served_matches(res.served, m):
+            # 名簿の alias と違うモデルが応答した＝版の未知化。本文は使わず、費用は実額のまま（第 4 往復の合意 C）
+            res = Result(2, "served_model_mismatch", usage=res.usage, served=res.served, unknown=res.unknown)
     except (TimeoutError, RequestsTimeout):
-        res = Result(2, "タイムアウト")
+        res = Result(2, "タイムアウト", unknown=True)
     except Exception:
-        res = Result(2, "通信失敗")
+        res = Result(2, "通信失敗", unknown=True)
     finally:
         try:
             budget.settle(task, usd, tokens, reservation["epoch"])
@@ -278,7 +320,7 @@ def generate(prompt: str, *, entry_id: str = "sakana-fugu-max",
                 budget.stop(reservation["epoch"])
             except gate.GateDenied:
                 pass
-            res = Result(2, error.reason)
+            res = Result(2, error.reason, usage=res.usage, served=res.served, unknown=res.unknown)
     return finish(res, usd)
 
 
@@ -289,13 +331,13 @@ def _response(resp, entry, unknown_usd=UNKNOWN_USAGE_USD) -> Tuple[Result, float
     if code == 429:
         return Result(2, "上限到達(429)"), 0.0
     if code >= 500:
-        return Result(2, "API障害"), unknown_usd
+        return Result(2, "API障害", unknown=True), unknown_usd
     if code != 200:
         return Result(2, f"API障害(HTTP {code})"), 0.0
     try:
         return _parse(resp.json(), entry, unknown_usd)
     except Exception:
-        return Result(3, "解析失敗"), unknown_usd
+        return Result(3, "解析失敗", unknown=True), unknown_usd
 
 
 def check_status(*, net: bool = True, net_timeout: float = 20) -> Tuple[bool, str]:
@@ -315,6 +357,13 @@ def check_status(*, net: bool = True, net_timeout: float = 20) -> Tuple[bool, st
     key = config.env("SAKANA_API_KEY")
     if not key:
         return False, f"fugu: 鍵なし model={m} {spend}"
+    if _needs_reconcile():
+        try:
+            n = usage.today_unknown("fugu")
+        except Exception:
+            n = None
+        why = f"実費不明 {n} 回" if n is not None else "台帳が読めない"
+        return False, f"fugu: 要照合（{why}。照合後に ORCH_FUGU_RECONCILED=1） model={m} {spend}"
     if requests is None:
         return False, f"fugu: {REQUESTS_MISSING}（bash scripts/setup.sh） model={m} {spend}"
     if not net:

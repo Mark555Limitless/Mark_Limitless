@@ -3,6 +3,13 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-16 未明 第 4 往復の合意の実装（司令塔: Claude Fable 5.1）
+- 状態: Codex は利用枠の上限（rc=4・差分なし）。CLAUDE.md の例外により**司令塔が直接実装**（指示書 `docs/specs/20261016_cost_unknown_model_id.md`。指示書の範囲外の `tests/conftest.py` を 1 行〔FLAG_VARS に ORCH_GEMINI_RECONCILED・ORCH_FUGU_RECONCILED〕）。Opus 審査 APPROVE。pytest 835 passed・5 skipped、hooks 247 passed
+- 実装: 使用量が読めない応答・タイムアウト・通信例外・5xx の計上を Gemini でも `max($0.05, 見込み額)` に（上限の判定も「実額＋見込み額」）。応答の実行時モデル ID（Gemini `modelVersion`・Fugu `model`）を記録し、名簿の alias と版の表記だけ違う場合を除いて不一致なら rc=2 `served_model_mismatch`（本文を使わない・費用は実額・再試行しない）。同じベンダーで実費不明の失敗が当日 2 回なら `要照合` で停止（`ORCH_<VENDOR>_RECONCILED=1` で解除）。台帳の行に `served`・`unknown`
+- 審査の軽い指摘は gate_followups の 10 に追加（Gemini の入口の型検査・台帳読み失敗・負のトークン数）
+- 振り分け役 v0 の 1 週目の指示書 `docs/specs/20261016_router_v0_week1.md` を作成（Codex の枠が戻ってから。戻らなければ司令塔が直接）
+- 次の一手: 振り分け役 v0 の 1 週目
+
 ## 2026-10-16 深夜 第 4 往復（この Codex スレッド）と難しめのコーディングの実測（司令塔: Claude Fable 5.1。Mark が /model で指定）
 - 状態: Mark の指示「コミットして。」でコミット済み: `docs/brainstorm/20261014-luna-wallbounce.md`（第 4 往復）・`docs/proposals/20261015-prototype-baseline.md`（§2.1 M0/M1）・`docs/specs/20261016_cost_unknown_model_id.md`（新規）・`state/escalations.log`・`☆ルミナス_最終プロンプト.docx`（SessionEnd の再生成）・本日の記録 3 つ
 - Mark の指示（原文）: 「「確かめてから返す」を v0 に加えて、正解率を上げるのは賛成だけれど、それによって回答までの時間が極端に長くなるとユーザーにはむしろマイナス評価になり得ます。確かめるためにどの程度の追加時間がかかるかも考慮に入れてください。もっと難しいコーディング（複数ファイル・バグ修正など）でも Fugu を測ってみてください。」

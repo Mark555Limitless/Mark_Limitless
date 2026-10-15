@@ -34,6 +34,8 @@ tests/test_tools.py
 8. **（同・中）** `check_status` にも、名簿の行と使うモデル名の一致確認を入れる（不一致なら点検でも拒否と表示）。
 9. **（同・低）** 試験の追加: 存在しない id／state=adopted が通る／ORCH_GEMINI_MODEL が名簿と違うと拒否・同じなら通る／CLI の `--entry` が渡る。
 
+10. **（cost_unknown_model_id の審査・軽）** `orch/gemini.py` の `generate` の入口で `prompt` が文字列でない・`max_output_tokens` が整数にできない値なら rc=2「入力不正」（Fugu と同じ）。上限の判定（`daily_usd()`）が台帳の読み失敗で例外にならないよう、例外なら「上限到達」（fail-closed）。`cost_from_usage`／`_int` で負のトークン数を 0 に。
+
 ## テスト
 - role_key で選べる／role_key が無ければ日本語名で選べる／role_key と名簿が食い違えば拒否（通信しない）。
 - scope_check: 実行中の gate_ledger への追記（正しい JSON 行）は違反にならない、壊れた行・負の数・既存部分の書き換えは違反。

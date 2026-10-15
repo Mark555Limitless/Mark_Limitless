@@ -56,3 +56,28 @@ def test_bad_rows_do_not_lower_totals(isolated_env):
     assert usage.today_calls("gemini") == 1
     day = next(iter(usage.summarize(1).values()))
     assert day["gemini"]["usd"] == 0.5 and day["gemini"]["calls"] == 1
+
+
+def test_today_unknown_counts_only_today_error_unknown_rows(isolated_env):
+    usage.record("gemini", usd=0.05, status="error", unknown=True)
+    usage.record("gemini", usd=0.05, status="error")            # unknown でない失敗は数えない
+    usage.record("gemini", usd=0.05, status="ok", unknown=True)  # 成功は数えない
+    usage.record("fugu", usd=0.05, status="error", unknown=True)  # 別のベンダー
+    y = (config.now_jst() - timedelta(days=1)).isoformat(timespec="seconds")
+    with open(usage.ledger_path(), "a", encoding="utf-8") as fh:  # 前日の行
+        fh.write(json.dumps({"ts": y, "vendor": "gemini", "status": "error", "unknown": True, "usd": 0.05}) + "\n")
+    assert usage.today_unknown("gemini") == 1
+    assert usage.today_unknown("fugu") == 1
+    rows = read_ledger(isolated_env)
+    assert rows[0]["unknown"] is True and "unknown" not in rows[1]
+
+
+def test_served_model_is_recorded_and_redacted(isolated_env, monkeypatch):
+    fake = "AI" "za" + "FAKE" * 8 + "12"
+    monkeypatch.setenv("GEMINI_API_KEY", fake)
+    usage.record("gemini", served_model="gemini-3.8-flash-001")
+    usage.record("gemini", served_model="x " + fake)
+    usage.record("gemini")
+    rows = read_ledger(isolated_env)
+    assert rows[0]["served"] == "gemini-3.8-flash-001"
+    assert fake not in json.dumps(rows) and "served" not in rows[2]

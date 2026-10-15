@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import re
 import uuid
 import sys
 import threading
@@ -44,6 +46,8 @@ class Result:
     reason: str
     text: str = ""
     usage: Dict[str, Any] = field(default_factory=dict)
+    served: str = ""      # 応答の modelVersion（実行時のモデル ID。無ければ空）
+    unknown: bool = False  # 実費が分からず、見込み額以上の控えめな額を計上した
 
 
 def _roster(entry_id: Optional[str] = None):
@@ -97,6 +101,32 @@ def daily_cap() -> float:
     return config.env_float("ORCH_GEMINI_DAILY_USD_CAP", 0.25)  # 1 日 $0.25 目安（Mark の決定 2026-10-11）
 
 
+def _needs_reconcile() -> bool:
+    """同じ接続先で実費不明が 1 日 2 回以上なら、請求画面との照合が済むまで止める（この Codex スレッドとの第 4 往復の合意 A・2026-10-16）。
+    Mark が照合したら ORCH_GEMINI_RECONCILED=1 で解除（日付が変われば自然に解除）。台帳が読めなければ止める側（fail-closed）。"""
+    if config.env("ORCH_GEMINI_RECONCILED") == "1":
+        return False
+    try:
+        return usage.today_unknown("gemini") >= 2
+    except Exception:
+        return True
+
+
+def _clean_served(value) -> str:
+    """応答の実行時モデル ID。外部から来る値なので、許す文字だけ残して 80 字に切る（記録の 1 行に改行やタブを差し込ませない）。"""
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"[^A-Za-z0-9._:/@-]", "", value)[:80]
+
+
+def _served_matches(served: str, model: str) -> bool:
+    """名簿の alias と実行時のモデル ID の照合。等しいか、alias の後ろが「-数字…」「-v数字…」の版の表記だけなら一致
+    （`gemini-3.8-flash-001`・`fugu-max-v1.0`・`fugu-max-20260615` は一致、`gemini-3.8-flash-lite-001`・`gemini-3.8-flash-8b-001` は不一致）。空は一致扱い。"""
+    if not served:
+        return True
+    return re.match(r"^" + re.escape(model) + r"(-v?\d+(\.\d+)*)?$", served) is not None
+
+
 def _post_with_timeout(url: str, headers: Dict[str, str], body: Dict[str, Any], timeout: float) -> requests.Response:
     """応答全体の待ち時間を別スレッドで打ち切る（requests の read timeout だけでは長引くことがあるため）。"""
     box: Dict[str, Any] = {}
@@ -135,7 +165,7 @@ def _log(model: str, res: Result, sec: float, usd: float, purpose: str, *, skipp
     try:
         line = (
             f"{config.ts()}\tmodel={model}\trc={res.rc}\tsec={sec:.1f}\tchars={len(res.text)}"
-            f"\tin={tin}\tout={tout}\tthink={think}\tusd={usd:.6f}\treason={res.reason}"
+            f"\tin={tin}\tout={tout}\tthink={think}\tusd={usd:.6f}\tserved={res.served or '-'}\treason={res.reason}"
         )
         path = config.log_dir() / "gemini.log"
         with config.file_lock(path.with_suffix(".lock")):
@@ -146,29 +176,35 @@ def _log(model: str, res: Result, sec: float, usd: float, purpose: str, *, skipp
     status = "ok" if res.rc == 0 else ("skip" if skipped or res.reason in ("停止中", "上限到達", "鍵なし", "全体停止中", REQUESTS_MISSING) else "error")
     try:
         usage.record("gemini", model=model, purpose=purpose, calls=0 if status == "skip" else 1,
-                     in_tokens=tin, out_tokens=tout + think, usd=usd, status=status, ms=int(sec * 1000))
+                     in_tokens=tin, out_tokens=tout + think, usd=usd, status=status, ms=int(sec * 1000),
+                     served_model=res.served, unknown=bool(res.unknown and status == "error"))
     except OSError:
         pass
 
 
-def _parse(data: Any, entry=None) -> Tuple[Result, float]:
-    """応答を解析する。形が崩れていても例外を出さず rc=3 にする。"""
+def _parse(data: Any, entry=None, unknown_usd: float = UNKNOWN_USAGE_USD) -> Tuple[Result, float]:
+    """応答を解析する。形が崩れていても例外を出さず rc=3 にする。使用量が読めないときは unknown_usd（見込み額以上）を計上する。"""
     if not isinstance(data, dict):
-        return Result(3, "解析失敗"), UNKNOWN_USAGE_USD
+        return Result(3, "解析失敗", unknown=True), unknown_usd
     md = data.get("usageMetadata")
     md = md if isinstance(md, dict) else {}
+    served = _clean_served(data.get("modelVersion"))
     known = any(isinstance(md.get(k), int) and not isinstance(md.get(k), bool)
                 for k in ("promptTokenCount", "candidatesTokenCount", "thoughtsTokenCount"))
-    usd = cost_from_usage(md, entry) if known else UNKNOWN_USAGE_USD  # 使用量が読めないときは控えめに計上
+    usd = cost_from_usage(md, entry) if known else unknown_usd  # 使用量が読めないときは控えめに計上
+
+    def r(rc, reason, text=""):
+        return Result(rc, reason, text=text, usage=md, served=served, unknown=not known)
+
     pf = data.get("promptFeedback")
     if isinstance(pf, dict) and pf.get("blockReason"):
-        return Result(3, "安全フィルタ", usage=md), usd
+        return r(3, "安全フィルタ"), usd
     cands = data.get("candidates")
     if not isinstance(cands, list) or not cands:
-        return Result(3, "空応答", usage=md), usd
+        return r(3, "空応答"), usd
     cand = cands[0]
     if not isinstance(cand, dict):
-        return Result(3, "解析失敗", usage=md), usd
+        return r(3, "解析失敗"), usd
     content = cand.get("content")
     parts = content.get("parts") if isinstance(content, dict) else None
     parts = parts if isinstance(parts, list) else []
@@ -176,8 +212,8 @@ def _parse(data: Any, entry=None) -> Tuple[Result, float]:
                    if isinstance(p, dict) and not p.get("thought") and isinstance(p.get("text"), str))
     if not text.strip():
         reason = "安全フィルタ" if cand.get("finishReason") in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST") else "空応答"
-        return Result(3, reason, usage=md), usd
-    return Result(0, "ok", text=text, usage=md), usd
+        return r(3, reason), usd
+    return r(0, "ok", text), usd
 
 
 def generate(
@@ -210,6 +246,8 @@ def generate(
         return finish(Result(2, "上限到達"))
     if requests is None:
         return finish(Result(2, REQUESTS_MISSING))
+    if _needs_reconcile():
+        return finish(Result(2, "要照合"), skipped=True)
 
     try:
         roster_path, entry = _roster(entry_id)
@@ -225,8 +263,19 @@ def generate(
                 raise gate.GateDenied("model_mismatch")
         url = f"https://{entry['hosts'][0]}/v1beta/models/{m}:generateContent"
         budget = gate.Budget(config.data_dir() / "gate_ledger.jsonl", {})
+        # 送る前の見込み額（入力の UTF-8 バイト数×入力単価＋出力上限×出力単価）。上限の判定は「当日の実額＋見込み額」、
+        # 使用量が読めないときの計上は見込み額以上（第 4 往復の合意 A。Fugu と同じ規則）。単価が壊れていれば rc=2（本流を止めない）
+        price = entry.get("price")
+        if (not isinstance(price, dict) or any(
+                type(price.get(k)) not in (int, float) or not math.isfinite(price[k]) or price[k] < 0
+                for k in ("input", "output"))):
+            raise gate.GateDenied("invalid_price")
+        estimate = (len(prompt.encode("utf-8")) * price["input"] + int(max_output_tokens) * price["output"]) / 1_000_000
     except gate.GateDenied as error:
         return finish(Result(2, error.reason), skipped=True)
+    if daily_usd() + estimate > daily_cap():
+        return finish(Result(2, "上限到達"))
+    unknown_usd = max(UNKNOWN_USAGE_USD, estimate)
     headers = {"x-goog-api-key": key, "Content-Type": "application/json"}
     gen_cfg: Dict[str, Any] = {"maxOutputTokens": int(max_output_tokens)}
     if thinking:
@@ -247,7 +296,7 @@ def generate(
                                     gen_cfg["maxOutputTokens"], task)
         except gate.GateDenied as error:
             return finish(Result(2, error.reason), skipped=True)
-        usd, tokens = UNKNOWN_USAGE_USD, reservation["reserved_tokens"]
+        usd, tokens = unknown_usd, reservation["reserved_tokens"]
         retry = False
         try:
             wait = float(timeout)
@@ -257,7 +306,10 @@ def generate(
                 raise TimeoutError()
             resp = _post_with_timeout(url, headers, body, wait)
             retry = attempt == 0 and bool(thinking) and _thinking_rejected(resp)
-            res, usd = _response(resp, entry)
+            res, usd = _response(resp, entry, unknown_usd)
+            if not _served_matches(res.served, entry["model"]):
+                # 名簿の alias と違うモデルが応答した＝版の未知化。本文は使わず、費用は実額のまま、再試行しない（第 4 往復の合意 C）
+                res, retry = Result(2, "served_model_mismatch", usage=res.usage, served=res.served, unknown=res.unknown), False
             md = res.usage
             if any(type(md.get(k)) is int and md[k] >= 0 for k in
                    ("promptTokenCount", "candidatesTokenCount", "thoughtsTokenCount")):
@@ -266,9 +318,9 @@ def generate(
             elif usd == 0:
                 tokens = 0
         except TimeoutError:
-            res = Result(2, "タイムアウト")
+            res = Result(2, "タイムアウト", unknown=True)
         except Exception:
-            res = Result(2, "通信失敗")
+            res = Result(2, "通信失敗", unknown=True)
         finally:
             try:
                 budget.settle(task, usd, tokens, reservation["epoch"])
@@ -278,14 +330,14 @@ def generate(
                     budget.stop(reservation["epoch"])
                 except gate.GateDenied:
                     pass  # An unreadable ledger itself blocks subsequent calls.
-                res, retry = Result(2, error.reason), False
+                res, retry = Result(2, error.reason, usage=res.usage, served=res.served, unknown=res.unknown), False
         if retry:
             gen_cfg.pop("thinkingConfig", None)
             continue
         return finish(res, usd)
 
 
-def _response(resp, entry) -> Tuple[Result, float]:
+def _response(resp, entry, unknown_usd: float = UNKNOWN_USAGE_USD) -> Tuple[Result, float]:
     code = getattr(resp, "status_code", 0)
     text = getattr(resp, "text", "") or ""
     if code in (401, 403):
@@ -293,13 +345,13 @@ def _response(resp, entry) -> Tuple[Result, float]:
     if code == 429 or (code != 200 and "RESOURCE_EXHAUSTED" in text):
         return Result(2, "上限到達(429)"), 0.0
     if code >= 500:
-        return Result(2, "API障害"), UNKNOWN_USAGE_USD
+        return Result(2, "API障害", unknown=True), unknown_usd
     if code != 200:
         return Result(2, f"API障害(HTTP {code})"), 0.0
     try:
-        return _parse(resp.json(), entry)
+        return _parse(resp.json(), entry, unknown_usd)
     except Exception:
-        return Result(3, "解析失敗"), UNKNOWN_USAGE_USD
+        return Result(3, "解析失敗", unknown=True), unknown_usd
 
 
 def check_status(*, net: bool = True, net_timeout: float = 20) -> Tuple[bool, str]:
@@ -319,6 +371,13 @@ def check_status(*, net: bool = True, net_timeout: float = 20) -> Tuple[bool, st
     key = config.env("GEMINI_API_KEY")
     if not key:
         return False, f"gemini: 鍵なし model={m} {spend}"
+    if _needs_reconcile():
+        try:
+            n = usage.today_unknown("gemini")
+        except Exception:
+            n = None
+        why = f"実費不明 {n} 回" if n is not None else "台帳が読めない"
+        return False, f"gemini: 要照合（{why}。照合後に ORCH_GEMINI_RECONCILED=1） model={m} {spend}"
     if requests is None:
         return False, f"gemini: {REQUESTS_MISSING}（bash scripts/setup.sh） model={m} {spend}"
     if not net:

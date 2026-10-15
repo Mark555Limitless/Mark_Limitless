@@ -364,3 +364,136 @@ def test_model_name_mismatch_is_denied(keyed, monkeypatch, isolated_env, adapter
     assert gemini.generate("public", data_class="A", model="other-model").reason == "model_mismatch"
     assert gemini.generate("public", data_class="A", entry_id="gemini-argon-sparring", model="other").reason == "model_mismatch"
     assert gate_rows(isolated_env) == []
+
+
+# --- 第 4 往復の合意（2026-10-16）: 費用不明は見込み額以上・実行時モデル ID・要照合 ---
+LONG = "あ" * 60_000  # 見込み額 ≈ 180,000 バイト×0.75 + 8192×3.75 ≈ $0.166 > $0.05
+
+
+def _estimate(prompt, max_out=8192):
+    return (len(prompt.encode("utf-8")) * 0.75 + max_out * 3.75) / 1_000_000
+
+
+@pytest.mark.parametrize("mode", ["timeout", "exception", "503", "no_usage", "non_json"])
+def test_unknown_cost_is_at_least_estimate(keyed, monkeypatch, isolated_env, mode):
+    monkeypatch.setenv("ORCH_GEMINI_DAILY_USD_CAP", "5")
+    if mode == "timeout":
+        monkeypatch.setattr(gemini, "_post_with_timeout", lambda *a, **k: (_ for _ in ()).throw(TimeoutError()))
+    elif mode == "exception":
+        monkeypatch.setattr(gemini.requests, "post", lambda url, **k: (_ for _ in ()).throw(ConnectionError("x")))
+    elif mode == "503":
+        monkeypatch.setattr(gemini.requests, "post", lambda url, **k: FakeResp(503, {"error": {}}))
+    elif mode == "no_usage":
+        monkeypatch.setattr(gemini.requests, "post", lambda url, **k: FakeResp(200, {"candidates": []}))
+    else:
+        monkeypatch.setattr(gemini.requests, "post", lambda url, **k: FakeResp(200, "not json"))
+    r = gemini.generate(LONG, thinking=None, data_class="A")
+    assert r.rc in (2, 3) and r.unknown is True
+    est = _estimate(LONG)
+    assert est > 0.05
+    assert abs(usage.today_usd("gemini") - est) < 1e-9
+    rows = read_ledger(isolated_env)
+    assert rows[-1]["unknown"] is True and rows[-1]["status"] == "error"
+    import json as _json
+    settles = [_json.loads(l) for l in (isolated_env / "data" / "gate_ledger.jsonl").read_text(encoding="utf-8").splitlines()
+               if l.strip() and _json.loads(l).get("kind") in ("settle", "late")]
+    assert len(settles) == 1 and settles[0]["actual_usd"] == pytest.approx(est)
+
+
+def test_thinking_rejected_then_503_settles_estimate(keyed, monkeypatch, isolated_env):
+    import json as _json
+    monkeypatch.setenv("ORCH_GEMINI_DAILY_USD_CAP", "5")
+    seq = iter([FakeResp(400, {"error": {"message": "thinking not supported"}}), FakeResp(503, {"error": {}})])
+    monkeypatch.setattr(gemini.requests, "post", lambda url, **k: next(seq))
+    r = gemini.generate(LONG, data_class="A")
+    assert (r.rc, r.reason, r.unknown) == (2, "API障害", True)
+    settles = [_json.loads(l)["actual_usd"] for l in (isolated_env / "data" / "gate_ledger.jsonl").read_text(encoding="utf-8").splitlines()
+               if l.strip() and _json.loads(l).get("kind") in ("settle", "late")]
+    assert settles == [0.0, pytest.approx(_estimate(LONG))]
+    assert abs(usage.today_usd("gemini") - _estimate(LONG)) < 1e-9
+
+
+def test_short_prompt_unknown_cost_is_floor(keyed, monkeypatch):
+    monkeypatch.setattr(gemini.requests, "post", lambda url, **k: FakeResp(503, {"error": {}}))
+    gemini.generate("x", thinking=None, data_class="A")
+    assert abs(usage.today_usd("gemini") - 0.05) < 1e-9
+
+
+def test_cap_counts_estimate_before_call(keyed, monkeypatch):
+    usage.record("gemini", usd=0.20)
+    monkeypatch.setattr(gemini.requests, "post", _no_call)
+    assert gemini.generate(LONG, thinking=None, data_class="A").reason == "上限到達"  # 0.20 + 0.166 > 0.25
+    monkeypatch.setattr(gemini.requests, "post", lambda url, **k: FakeResp(200, OK))
+    assert gemini.generate("x", thinking=None, data_class="A").rc == 0  # 0.20 + 0.03 < 0.25
+
+
+@pytest.mark.parametrize("served,ok", [("gemini-test", True), ("gemini-test-001", True), ("gemini-test-v2.0", True), ("", True),
+                                       ("gemini-other", False), ("gemini-test-lite-001", False), ("gemini-tester", False),
+                                       ("gemini-test-8b-001", False), ("gemini-test-001x", False)])
+def test_served_model_prefix_match(  # 試験の名簿の行は model="gemini-test"（前方一致）
+        keyed, monkeypatch, isolated_env, served, ok):
+    body = dict(OK)
+    if served:
+        body["modelVersion"] = served
+    calls = []
+    monkeypatch.setattr(gemini.requests, "post", lambda url, **k: calls.append(1) or FakeResp(200, body))
+    r = gemini.generate("x", data_class="A")
+    if ok:
+        assert r.rc == 0 and r.served == served
+    else:
+        assert (r.rc, r.reason, r.text) == (2, "served_model_mismatch", "")
+        assert len(calls) == 1  # 再試行しない
+        expected = (1000 * 0.75 + (200 + 800) * 3.75) / 1_000_000  # 費用は実額
+        assert abs(usage.today_usd("gemini") - expected) < 1e-9
+    rows = read_ledger(isolated_env)
+    assert rows[-1].get("served", "") == served
+    log = (isolated_env / "logs" / "gemini.log").read_text(encoding="utf-8")
+    assert f"served={served or '-'}" in log
+
+
+def test_reconcile_stop_after_two_unknown(keyed, monkeypatch, isolated_env):
+    for _ in range(2):
+        usage.record("gemini", usd=0.05, status="error", unknown=True)
+    monkeypatch.setattr(gemini.requests, "post", _no_call)
+    r = gemini.generate("x", data_class="A")
+    assert (r.rc, r.reason) == (2, "要照合")
+    assert read_ledger(isolated_env)[-1]["calls"] == 0
+    ok, line = gemini.check_status(net=False)
+    assert not ok and "要照合" in line and "2 回" in line
+    monkeypatch.setenv("ORCH_GEMINI_RECONCILED", "1")
+    monkeypatch.setattr(gemini.requests, "post", lambda url, **k: FakeResp(200, OK))
+    assert gemini.generate("x", data_class="A").rc == 0
+
+
+def test_served_value_is_sanitized_in_log(keyed, monkeypatch, isolated_env):
+    body = dict(OK); body["modelVersion"] = "gemini-test\nrc=0\tx=1"
+    monkeypatch.setattr(gemini.requests, "post", lambda url, **k: FakeResp(200, body))
+    r = gemini.generate("x", data_class="A")
+    assert r.served == "gemini-testrc0x1" and r.rc == 2  # 整えた結果が alias と一致しないので拒否
+    log = (isolated_env / "logs" / "gemini.log").read_text(encoding="utf-8")
+    assert len(log.splitlines()) == 1 and "served=gemini-testrc0x1" in log
+
+
+def test_reconciled_flag_must_be_one(keyed, monkeypatch):
+    for _ in range(2):
+        usage.record("gemini", usd=0.05, status="error", unknown=True)
+    monkeypatch.setenv("ORCH_GEMINI_RECONCILED", "0")
+    monkeypatch.setattr(gemini.requests, "post", _no_call)
+    assert gemini.generate("x", data_class="A").reason == "要照合"
+
+
+@pytest.mark.parametrize("price", ["bad", {"input": "x", "output": "y"}, {"output": 1.0}, {"input": -1, "output": 1.0}])
+def test_broken_price_in_roster_is_rc2_not_exception(keyed, monkeypatch, isolated_env, adapter_roster, price):
+    import json as _json
+    data = _json.loads(adapter_roster.read_text(encoding="utf-8"))
+    data["entries"][0]["price"] = price
+    adapter_roster.write_text(_json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(gemini.requests, "post", _no_call)
+    r = gemini.generate("x", data_class="A")
+    assert r.rc == 2 and r.reason in ("invalid_price", "unknown_price")
+
+
+def test_one_unknown_does_not_stop(keyed, monkeypatch):
+    usage.record("gemini", usd=0.05, status="error", unknown=True)
+    monkeypatch.setattr(gemini.requests, "post", lambda url, **k: FakeResp(200, OK))
+    assert gemini.generate("x", data_class="A").rc == 0
