@@ -49,6 +49,7 @@
 |---|---|---|
 | 毎日 | digest 1 件、HANDOVER.md に節を追加、Obsidian 同期、外部AIの支出確認（`.venv/bin/python -m orch.usage --days 1`） | 司令塔（hook が催促） |
 | 毎週 | digest 7 件を読み返し、繰り返し出る問題を ADR か ROUTINE 改訂にする | 司令塔＋レビュー役 |
+| 毎週（週次の AI 調査のたび） | 現行手順の記録（P0）を `state/p0/YYYY-Www-cycleN.md` に書く（様式は `docs/baseline/weekly-report-template.md` の下半分。工程ごとの時間・呼び出しとトークン・結果・見落とし候補・人の判断。Mark の関与は、会話で分かる範囲〔指示・承認の回数と、承認待ちの時間〕を司令塔が記録し、Mark に記入を求めない）。Mark の指示 2026-10-15 | 司令塔 |
 | 毎月 | `state/escalations.log` の監査（妥当性・コスト）。基準を CLAUDE.md に反映 | レビュー役（Sonnet）→ 必要時 Opus |
 | 四半期 | 憲章の見直し提案（変更は Mark 承認） | 司令塔 → Mark |
 
