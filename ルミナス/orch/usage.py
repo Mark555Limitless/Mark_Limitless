@@ -16,7 +16,7 @@ from typing import Any, Dict, Iterator, Optional
 
 from . import config
 
-VENDORS = ("gemini", "jev", "codex", "anthropic")
+VENDORS = ("gemini", "jev", "codex", "anthropic", "fugu")
 STATUSES = ("ok", "warn", "skip", "error")
 
 
