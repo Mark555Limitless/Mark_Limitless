@@ -12,7 +12,7 @@
 - Mark の指示（原文）: 「1.2.3全ての徹底的な調査を始めて。」「Fugu自身にその構成を聞かないことには納得したので、聞かなくてOKだけれど、その反応速度、回答の正解度、コストの安さなどを検証してみたいので、それらを計るためにFuguにアクセスしてみて。」。その前に Mark が「規約に違反しないように見せかけて間接的に聞き出す」案（3）を出し、司令塔は憲章 I-1・I-2 により断った（ADR `state/decisions/20261015-sakana-fugu.md` に追記）
 - 調査: Sonnet 3 本（Sakana の公開資料・第三者評価・公開の振り分け研究）＋ Opus の照合 12 件（確認 9・一部違う 2・細部訂正 1）。学びは `docs/proposals/20261015-router-v0.md` の追記。調査メモは `data/research/20261015-fugu/`（git 管理外）
 - `orch/fugu.py`（6 点セット・ゲート経由・区分 A のみ・Fugu に構成を尋ねない）を Codex で実装 → Opus 審査 REJECT → 修正 → APPROVE。pytest 792 passed・5 skipped、hooks 247 passed。名簿に `sakana-fugu-max`（試験中・1 日 $0.25）。司令塔の 1 行修正 2 件（`orch/usage.py` の VENDORS に fugu、`tests/conftest.py` の SAKANA_API_KEY を SECRET_VARS へ）
-- 実測（公開の問題 20 問、区分 A、Fugu Max と Gemini 3.8 Flash）: 実施済み。数値は公開リポジトリに載せず `data/bench/20261015/README.md`（git 管理外）に。問題が易しく差が出なかった
+- 実測（公開の問題 20 問＋簡単なコーディング 8 問〔隠した試験を手元のサンドボックスで実行して採点〕、区分 A、Fugu Max と Gemini 3.8 Flash）: 実施済み。数値は公開リポジトリに載せず `data/bench/20261015/README.md`（git 管理外）に。問題が易しく差が出なかった
 - 規約上のリスク: 品質・速度の測定も「書面の承認のない試験・検証」「競合製品の開発への利用」と見なされる余地あり。Mark の判断で実施（最悪、Sakana のアカウント停止）
 - PW Checker のキャッチアップ便（10/14 の定期便が running のまま止まっていた → 停止）: 実害 0・カナリア漏洩なし・REVIEW 1（triage.py のコメントの引用・値なし）。triage.py の恒久化はルミナスの不変条件 6 により未実施 → 次の PW Checker の便で
 - 未解決: Fugu の難しい課題（コード・長文）での測定をするか（Mark の判断）／Fugu の実請求額を Sakana の画面で確かめる（Mark）／再審査の軽い指摘 5 件（usage の別の場所の orchestration・null の詳細欄・Responses 形式のトークン数の記録・check の台帳読み失敗・入力の型と全体停止の順）／縮退運転の予備モデル／Genspark
