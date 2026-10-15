@@ -35,3 +35,4 @@
 2026-10-14T16:38:07Z | Astra（Mark の Codex スレッド）との壁打ち 3 往復 | claude-sonnet-5-5 | claude-fable-5 | Mark が /model で明示指定（設計の根幹の議論のため司令塔の最上位モデルへ） | 3 往復完了。完成条件 4→6・版の 3 区分・承認失効の最小規則を追加。Luna の 10 往復と矛盾なし
 2026-10-14T16:51:28Z | 素体の開発開始（P1・P2・P4 の指示書と実装） | claude-fable-5 | claude-opus-5-5 | Mark が /model で明示指定 | P4 ゲートを Codex で実装・修正、Opus 審査 2 回とも APPROVE（コードの審査は Opus のサブエージェント・model 明示）
 2026-10-15T05:08:36Z | Fugu の公開資料の調査と実測 | claude-opus-5-5 | claude-sonnet-5-5・claude-opus-5-5 | 集める作業（Web 調査 3 本）は Sonnet、主張 12 件の照合とコード審査 2 回は Opus（判断する作業） | 照合 12 件（確認 9・一部違う 2・細部訂正 1）。審査 REJECT→APPROVE。実測は orch.fugu・orch.gemini で 20 問ずつ
+2026-10-15T18:06:10Z | この Codex スレッドとの第 4 往復（費用不明の扱い・完成の二段化・alias の監視）と、難しめのコーディングでの Fugu の実測 | claude-opus-5-5 | claude-fable-5-1 | Mark が /model で明示指定（設計の根幹の議論のため司令塔の最上位モデルへ） | 第 4 往復に回答（A は 1 点修正で合意・B・C 合意）。最終提案 §2.1 に M0/M1 を追記
