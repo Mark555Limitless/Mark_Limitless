@@ -2,17 +2,23 @@
 
 Budget uses a dedicated regular JSONL file, locked on that file (POSIX). Its
 parent must already exist and its fixed path must not be replaced or truncated.
-Days use JST, as in the existing usage ledger. Settlements
+Days and calendar months use JST. Limits and accounting are per roster entry.
+Roster and caller caps are combined using the smaller limit for each key.
+Settlements
 replace estimates; outstanding reservations from earlier days still consume
 today's budget. Cross-day settlements charge actual usage on settlement day.
-Task identifiers are hashed before persistence. Each reservation has a unique
+Task identifiers are ledger-wide (including duplicate/stop checks) and hashed
+before persistence. Each reservation has a unique
 epoch; stop(epoch) invalidates that epoch and all earlier ones, durably.
+Late replies close reservations for accounting only, once, on receipt day.
+Stopped tasks require an explicit human release; the gate never releases them.
 The ledger must be retained: after deletion/truncation, a new process cannot
 distinguish lost accounting history from a first run. A random initial epoch
 prevents an old response from settling a new reservation in a recreated ledger.
 Money is calculated exactly; JSON numbers that would lose decimal precision
 are refused. Integral amounts remain integers in the ledger.
-seconds_per_task measures wall time since the task's first reservation, across
+seconds_per_task measures wall time since the task's first reservation for that
+entry, across
 restarts. Returned deadlines must also be enforced by the calling adapter;
 this offline module cannot interrupt a running request.
 """
@@ -37,7 +43,7 @@ from urllib.parse import urlsplit
 _REQUIRED = set("id role provider model version_kind state max_data_class hosts "
                 "price evidence rollback_to review_by".split())
 _CLASSES = ("A", "B", "C")
-_CAPS = {"usd_per_day", "calls_per_day", "tokens_per_day", "seconds_per_task"}
+_CAPS = {"usd_per_day", "usd_per_month", "calls_per_day", "tokens_per_day", "seconds_per_task"}
 _GENERIC_SECRET = re.compile(
     r"(sk-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{30,}|AQ\.[A-Za-z0-9_-]{20,}|Bearer\s+[A-Za-z0-9._-]{12,})"
 )
@@ -119,18 +125,18 @@ def classify(parts) -> str:
     items = _parts(parts)
     result = "A"
     for text, label in items:
-        if (label not in _CLASSES or any(word in text for word in _PRIVATE)
+        if (label not in _CLASSES or any(word.casefold() in text.casefold() for word in _PRIVATE)
                 or _GENERIC_SECRET.search(text)):
             return "C"
         result = max(result, label)
     combined = "".join(text for text, _ in items)
-    if any(word in combined for word in _PRIVATE) or _GENERIC_SECRET.search(combined):
+    if any(word.casefold() in combined.casefold() for word in _PRIVATE) or _GENERIC_SECRET.search(combined):
         return "C"
     return result
 
 
 def _host(host):
-    if not isinstance(host, str) or not host or len(host) > 253:
+    if not isinstance(host, str) or not host or len(host) > 253 or not host.isascii():
         raise GateDenied("invalid_host")
     host = host.lower()
     if not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", part)
@@ -238,11 +244,15 @@ def _day(at):
         raise GateDenied("invalid_timestamp") from None
 
 
+def _caps(caps):
+    if not isinstance(caps, dict) or not caps.keys() <= _CAPS:
+        raise GateDenied("invalid_caps")
+    return {key: _number(value, "invalid_caps") for key, value in caps.items()}
+
+
 class Budget:
     def __init__(self, ledger_path, caps):
-        if not isinstance(caps, dict) or not caps.keys() <= _CAPS:
-            raise GateDenied("invalid_caps")
-        self.caps = {key: _number(value, "invalid_caps") for key, value in caps.items()}
+        self.caps = _caps(caps)
         try:
             self.ledger_path = Path(ledger_path)
         except (ValueError, TypeError):
@@ -297,6 +307,9 @@ class Budget:
                 task = row["task_id"]
                 if not isinstance(task, str) or not re.fullmatch(r"[0-9a-f]{64}", task):
                     raise GateDenied("ledger_task")
+                entry_id = row["entry_id"]
+                if not isinstance(entry_id, str) or not entry_id:
+                    raise GateDenied("ledger_entry")
                 if kind == "reserve":
                     if ((last_epoch and epoch != last_epoch + 1) or epoch == 0
                             or task in pending or task in stopped):
@@ -310,19 +323,17 @@ class Budget:
                             raise GateDenied("ledger_deadline")
                     reservations[epoch] = row
                     pending[task] = epoch
-                    first.setdefault(task, at)
+                    first.setdefault((entry_id, task), at)
                     last_epoch = epoch
                 elif kind in ("settle", "late"):
                     reservation = reservations[epoch]
-                    if reservation["task_id"] != task:
+                    if reservation["task_id"] != task or reservation["entry_id"] != entry_id:
                         raise GateDenied("ledger_task")
                     _number(row["actual_usd"])
                     _integer(row["actual_tokens"])
-                    if kind == "late":
-                        if epoch > cutoff:
-                            raise GateDenied("ledger_late")
-                        continue
-                    if epoch <= cutoff or pending.get(task) != epoch:
+                    if (kind == "late") != (epoch <= cutoff):
+                        raise GateDenied("ledger_late")
+                    if pending.get(task) != epoch:
                         raise GateDenied("ledger_settlement")
                     warning, stop = self._flags(reservation, row["actual_usd"], at)
                     if row["warning"] is not warning or row["stopped"] is not stop:
@@ -331,6 +342,19 @@ class Budget:
                     del pending[task]
                     if stop:
                         stopped.add(task)
+                elif kind == "release":
+                    reservation = reservations[epoch]
+                    if (task not in stopped or task in pending
+                            or reservation["task_id"] != task
+                            or reservation["entry_id"] != entry_id
+                            or not settled[epoch]["stopped"]
+                            or epoch != max(e for e, s in settled.items() if s["task_id"] == task)):
+                        raise GateDenied("ledger_release")
+                    reason_hash = row["reason_hash"]
+                    if not isinstance(reason_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", reason_hash):
+                        raise GateDenied("ledger_release")
+                    stopped.remove(task)
+                    first = {key: value for key, value in first.items() if key[1] != task}
                 else:
                     raise GateDenied("ledger_kind")
         except (KeyError, ValueError, TypeError, RecursionError):
@@ -368,6 +392,14 @@ class Budget:
             raise GateDenied("unknown_price")
         price_in = _number(price.get("input"), "invalid_price")
         price_out = _number(price.get("output"), "invalid_price")
+        entry_id = entry.get("id")
+        if not isinstance(entry_id, str) or not entry_id:
+            raise GateDenied("invalid_roster_id")
+        caps = dict(self.caps)
+        for key, value in _caps(entry.get("caps", {})).items():
+            caps[key] = min(caps.get(key, value), value)
+        if not caps:
+            raise GateDenied("missing_caps")
         estimate = _json_number(calls * (max_in_tokens * price_in + max_out_tokens * price_out)
                                 / 1000000)
         tokens = calls * (max_in_tokens + max_out_tokens)
@@ -380,34 +412,45 @@ class Budget:
             if task in pending or task in stopped:
                 raise GateDenied("task_unavailable")
             deadline = None
-            if "seconds_per_task" in self.caps:
-                deadline = _json_number(_number(first.get(task, now)) + self.caps["seconds_per_task"])
+            if "seconds_per_task" in caps:
+                deadline = _json_number(_number(first.get((entry_id, task), now)) + caps["seconds_per_task"])
                 _day(deadline)
                 if now > deadline:
                     raise GateDenied("task_timeout")
-            totals = {"usd_per_day": _number(estimate), "calls_per_day": Fraction(calls),
+            totals = {"usd_per_day": _number(estimate), "usd_per_month": _number(estimate),
+                      "calls_per_day": Fraction(calls),
                       "tokens_per_day": Fraction(tokens)}
             for old_epoch, reservation in reservations.items():
+                if reservation["entry_id"] != entry_id:
+                    continue
                 settlement = settled.get(old_epoch)
                 if settlement is None or _day(reservation["at"]) == today:
                     totals["calls_per_day"] += reservation["calls"]
                 if settlement is None:
                     totals["usd_per_day"] += _number(reservation["estimated_usd"])
+                    totals["usd_per_month"] += _number(reservation["estimated_usd"])
                     totals["tokens_per_day"] += reservation["reserved_tokens"]
-                elif _day(settlement["at"]) == today:
-                    totals["usd_per_day"] += _number(settlement["actual_usd"])
-                    totals["tokens_per_day"] += settlement["actual_tokens"]
-            if any(value > self.caps[key] for key, value in totals.items() if key in self.caps):
+                else:
+                    settled_day = _day(settlement["at"])
+                    if (settled_day.year, settled_day.month) == (today.year, today.month):
+                        totals["usd_per_month"] += _number(settlement["actual_usd"])
+                    if settled_day == today:
+                        totals["usd_per_day"] += _number(settlement["actual_usd"])
+                        totals["tokens_per_day"] += settlement["actual_tokens"]
+            if any(value > caps[key] for key, value in totals.items() if key in caps):
                 raise GateDenied("budget_exceeded")
             next_epoch = epoch + 1 if epoch else uuid.uuid4().int
             return self._append(stream, {"kind": "reserve", "task_id": task, "epoch": next_epoch,
+                                        "entry_id": entry_id,
                                         "at": now, "deadline": deadline, "calls": calls,
                                         "estimated_usd": estimate, "reserved_tokens": tokens})
 
     def settle(self, task_id, actual_usd, actual_tokens, epoch):
         task = _task(task_id)
-        _number(actual_usd)
-        _integer(actual_tokens)
+        if actual_usd is not None:
+            _number(actual_usd)
+        if actual_tokens is not None:
+            _integer(actual_tokens)
         _integer(epoch, minimum=1)
         with self._locked() as stream:
             reservations, _, pending, _, _, cutoff, _, last_at = self._read(stream)
@@ -418,14 +461,44 @@ class Budget:
             reservation = reservations.get(epoch)
             if reservation is None or reservation["task_id"] != task:
                 raise GateDenied("unknown_reservation")
+            if pending.get(task) != epoch:
+                raise GateDenied("already_settled")
+            if epoch <= cutoff:
+                if actual_usd is None:
+                    actual_usd = reservation["estimated_usd"]
+                if actual_tokens is None:
+                    actual_tokens = reservation["reserved_tokens"]
+            _number(actual_usd)
+            _integer(actual_tokens)
             row = {"kind": "late" if epoch <= cutoff else "settle", "task_id": task,
+                   "entry_id": reservation["entry_id"],
                    "epoch": epoch, "at": now, "actual_usd": actual_usd,
                    "actual_tokens": actual_tokens}
-            if epoch > cutoff:
-                if pending.get(task) != epoch:
-                    raise GateDenied("already_settled")
-                row["warning"], row["stopped"] = self._flags(reservation, actual_usd, now)
+            row["warning"], row["stopped"] = self._flags(reservation, actual_usd, now)
             return self._append(stream, row)
+
+    def release(self, task_id, reason):
+        """Human-only reset of a stopped task, including its time window.
+
+        Persist only a digest of the supplied reason, never arbitrary text that
+        could contain payloads or credentials. Historical charges are retained.
+        """
+        task = _task(task_id)
+        if not isinstance(reason, str) or not reason.strip():
+            raise GateDenied("invalid_release_reason")
+        reason_hash = _task(reason)
+        with self._locked() as stream:
+            reservations, settled, _, stopped, _, _, _, last_at = self._read(stream)
+            if task not in stopped:
+                raise GateDenied("task_not_stopped")
+            now = time.time()
+            _day(now)
+            if now < last_at:
+                raise GateDenied("clock_rewound")
+            epoch = max(e for e, row in settled.items() if row["task_id"] == task)
+            return self._append(stream, {"kind": "release", "task_id": task, "epoch": epoch,
+                                        "entry_id": reservations[epoch]["entry_id"],
+                                        "at": now, "reason_hash": reason_hash})
 
     def stop(self, epoch=None):
         """Stop through a known epoch, or all existing reservations if omitted.

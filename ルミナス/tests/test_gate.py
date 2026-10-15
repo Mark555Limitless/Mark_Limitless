@@ -2,9 +2,11 @@
 
 import importlib
 import json
+import multiprocessing
 import socket
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import Mock
+from datetime import datetime, timedelta, timezone
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -30,7 +32,7 @@ def setup(tmp_path, monkeypatch):
              "version_kind": "snapshot", "state": "adopted", "max_data_class": "A",
              "hosts": ["api.example.test", "redirect.example.test"],
              "price": {"input": 1.0, "output": 3.0}, "evidence": [],
-             "rollback_to": "stop", "review_by": "2026-11-01"}
+             "rollback_to": "stop", "review_by": "2026-11-01", "caps": {"calls_per_day": 1000}}
     roster_path = tmp_path / "roster.json"
     ledger = tmp_path / "gate.jsonl"
     return entry, roster_path, ledger
@@ -55,7 +57,7 @@ def send(setup, **overrides):
     return gate(**args)
 
 
-def assert_denied(setup, **overrides):
+def assert_denied(setup, reason=None, **overrides):
     ledger = setup[2]
     before = ledger.read_bytes() if ledger.exists() else b""
     external = Mock()
@@ -66,6 +68,8 @@ def assert_denied(setup, **overrides):
     assert (ledger.read_bytes() if ledger.exists() else b"") == before
     assert len(error.value.reason) < 80
     assert FAKE_SECRET not in str(error.value)
+    if reason is not None:
+        assert error.value.reason == reason
 
 
 @pytest.mark.parametrize("state", ["adopted", "trial"])
@@ -269,7 +273,7 @@ def test_zero_calls(setup):
 
 def test_double_reservation_after_restart(setup):
     send(setup)
-    assert_denied(setup, budget=Budget(setup[2], {}))
+    assert_denied(setup, budget=Budget(setup[2], {}), reason="task_unavailable")
 
 
 @pytest.mark.parametrize("mode", ["true", "raise", "non_boolean"])
@@ -278,7 +282,7 @@ def test_detector_fail_closed(setup, mode):
         if mode == "raise":
             raise RuntimeError(FAKE_SECRET)
         return True if mode == "true" else None
-    assert_denied(setup, detector=detector)
+    assert_denied(setup, detector=detector, reason="detector_failed_or_denied")
 
 
 def test_detector_safe_and_combined(setup):
@@ -358,18 +362,21 @@ def test_zero_price(setup, actual, stopped):
 
 
 @pytest.mark.parametrize("explicit", [False, True])
-def test_late_settlement_not_applied_after_restart(setup, explicit):
+def test_late_settlement_closes_reservation_after_restart(setup, explicit):
     reservation = send(setup)
     budget = Budget(setup[2], {})
     budget.stop(reservation["epoch"]) if explicit else budget.stop()
     result = Budget(setup[2], {}).settle("task", 0, 0, reservation["epoch"])
     assert result["kind"] == "late"
     assert all(row["kind"] != "settle" for row in rows(setup[2]))
-    assert_denied(setup)  # Original reservation remains pending.
-    assert_denied(setup, budget=Budget(setup[2], {"usd_per_day": 0.4}), task_id="other")
-    fresh = send(setup, task_id="fresh")
+    before = setup[2].read_bytes()
+    with pytest.raises(GateDenied) as error:
+        budget.settle("task", 0, 0, reservation["epoch"])
+    assert error.value.reason == "already_settled"
+    assert setup[2].read_bytes() == before
+    fresh = send(setup, budget=Budget(setup[2], {"usd_per_day": 0.4}))
     assert fresh["epoch"] > reservation["epoch"]
-    assert Budget(setup[2], {}).settle("fresh", 0.4, 1, fresh["epoch"])["kind"] == "settle"
+    assert Budget(setup[2], {}).settle("task", 0.4, 1, fresh["epoch"])["kind"] == "settle"
 
 
 def test_duplicate_and_wrong_settlements(setup):
@@ -418,7 +425,7 @@ def test_stop_requires_known_explicit_epoch_and_allows_empty_noop(setup):
 
 
 @pytest.mark.parametrize("field", ["actual_usd", "actual_tokens"])
-@pytest.mark.parametrize("bad", ["0", -1, float("nan"), float("inf"), True])
+@pytest.mark.parametrize("bad", ["0", -1, float("nan"), float("inf"), True, None])
 def test_invalid_settlement_values(setup, field, bad):
     result = send(setup)
     values = dict(task_id="task", actual_usd=0.1, actual_tokens=1, epoch=result["epoch"])
@@ -506,3 +513,327 @@ def test_standalone_checks(setup):
     assert check_destination(roster, "test", ["https://api.example.test"]) == setup[0]
     assert check_send(roster, "test", [("ok", "A")], 2) == "A"
     assert not setup[2].exists()
+
+
+@pytest.mark.parametrize("caller_limit", [None, 1, 0.3])
+def test_roster_and_caller_use_stricter_cap(setup, caller_limit):
+    setup[0]["caps"] = {"usd_per_day": 0.35}
+    caller_caps = {} if caller_limit is None else {"usd_per_day": caller_limit}
+    budget = Budget(setup[2], caller_caps)
+    assert_denied(setup, budget=budget, reason="budget_exceeded")
+    # Caller wins when stricter, even when the roster would allow this amount.
+    if caller_limit == 0.3:
+        assert_denied(setup, budget=budget, max_in_tokens=310000, max_out_tokens=0,
+                      reason="budget_exceeded")
+
+
+@pytest.mark.parametrize("caps", [{"unknown": 1}, None, [], {"usd_per_month": "1"},
+                                  {"usd_per_day": -1}, {"calls_per_day": True}])
+def test_invalid_roster_caps(setup, caps):
+    setup[0]["caps"] = caps
+    assert_denied(setup, reason="invalid_caps")
+
+
+@pytest.mark.parametrize("present", [True, False])
+def test_no_limits_denied(setup, present):
+    if present:
+        setup[0]["caps"] = {}
+    else:
+        del setup[0]["caps"]
+    assert_denied(setup, reason="missing_caps")
+
+
+def test_caller_only_cap_still_works(setup):
+    del setup[0]["caps"]
+    budget = Budget(setup[2], {"calls_per_day": 1})
+    send(setup, budget=budget)
+    assert_denied(setup, budget=budget, task_id="next", reason="budget_exceeded")
+
+
+def test_caps_union_and_entry_limits_do_not_mutate_budget(setup):
+    budget = Budget(setup[2], {"calls_per_day": 1})
+    original_caps = dict(budget.caps)
+    setup[0]["caps"] = {"usd_per_day": 0.3}
+    assert_denied(setup, budget=budget, reason="budget_exceeded")
+    setup[0]["caps"] = {"usd_per_day": 0.4}
+    reservation = send(setup, budget=budget)
+    budget.settle("task", 0, 0, reservation["epoch"])
+    assert_denied(setup, budget=budget, task_id="next", reason="budget_exceeded")
+    assert budget.caps == original_caps
+
+
+def jst_timestamp(year, month, day, hour=0, minute=0):
+    return datetime(year, month, day, hour, minute,
+                    tzinfo=timezone(timedelta(hours=9))).timestamp()
+
+
+@pytest.mark.parametrize("year,month,day", [(2026, 10, 31), (2026, 12, 31)])
+def test_monthly_limit_uses_jst_calendar_month(setup, monkeypatch, year, month, day):
+    last_minute = jst_timestamp(year, month, day, 23, 59)
+    monkeypatch.setattr(gate_module.time, "time", lambda: last_minute - 86400)
+    setup[0]["caps"] = {"usd_per_month": 0.4}
+    budget = Budget(setup[2], {})
+    reservation = send(setup, budget=budget)
+    budget.settle("task", 0.4, 1, reservation["epoch"])
+    monkeypatch.setattr(gate_module.time, "time", lambda: last_minute)
+    assert_denied(setup, budget=budget, task_id="next", reason="budget_exceeded")
+    monkeypatch.setattr(gate_module.time, "time", lambda: last_minute + 60)
+    send(setup, budget=budget, task_id="next")
+    assert_denied(setup, budget=budget, task_id="third", reason="budget_exceeded")
+
+
+def test_pending_reservation_counts_in_next_month(setup, monkeypatch):
+    last_minute = jst_timestamp(2026, 10, 31, 23, 59)
+    monkeypatch.setattr(gate_module.time, "time", lambda: last_minute)
+    budget = Budget(setup[2], {"usd_per_month": 0.4})
+    reservation = send(setup, budget=budget)
+    monkeypatch.setattr(gate_module.time, "time", lambda: last_minute + 60)
+    assert_denied(setup, budget=budget, task_id="next", reason="budget_exceeded")
+    budget.settle("task", 0.1, 1, reservation["epoch"])
+    assert_denied(setup, budget=budget, task_id="next", reason="budget_exceeded")
+    send(setup, budget=budget, task_id="next", max_in_tokens=300000, max_out_tokens=0)
+
+
+def test_day_boundary_is_midnight_jst(setup, monkeypatch):
+    last_minute = jst_timestamp(2026, 10, 15, 23, 59)
+    monkeypatch.setattr(gate_module.time, "time", lambda: last_minute)
+    budget = Budget(setup[2], {"usd_per_day": 0.4, "calls_per_day": 1})
+    reservation = send(setup, budget=budget)
+    budget.settle("task", 0.4, 1, reservation["epoch"])
+    assert_denied(setup, budget=budget, task_id="next", reason="budget_exceeded")
+    monkeypatch.setattr(gate_module.time, "time", lambda: last_minute + 60)
+    send(setup, budget=budget, task_id="next")
+
+
+@pytest.mark.parametrize("settle_x", [False, True])
+@pytest.mark.parametrize("cap,limit", [("usd_per_day", 0.4), ("usd_per_month", 0.4),
+                                      ("calls_per_day", 1), ("tokens_per_day", 200000)])
+def test_shared_ledger_accounts_only_for_selected_entry(setup, settle_x, cap, limit):
+    setup[0]["caps"] = {cap: limit}
+    reservation = send(setup)
+    if settle_x:
+        settled = Budget(setup[2], {}).settle("task", 0.4, 200000, reservation["epoch"])
+        assert settled["entry_id"] == "test"
+    other = dict(setup[0], id="other")
+    setup[1].write_text(json.dumps({"entries": [setup[0], other]}))
+    budget = Budget(setup[2], {})
+    result = gate(setup[1], "other", ["https://api.example.test"], [("ok", "A")],
+                  10, budget, 1, 100000, 100000, "other-task")
+    assert result["entry_id"] == "other"
+    assert reservation["entry_id"] == "test"
+    assert_denied(setup, task_id="third", reason="budget_exceeded")
+
+
+@pytest.mark.parametrize("actual", [0.1, None])
+def test_late_charge_once_on_receipt_day_then_expires(setup, monkeypatch, actual):
+    reservation = send(setup)
+    budget = Budget(setup[2], {})
+    budget.stop()
+    monkeypatch.setattr(gate_module.time, "time", lambda: NOW + 86400)
+    closed = Budget(setup[2], {}).settle("task", actual, None, reservation["epoch"])
+    amount = 0.4 if actual is None else actual
+    assert closed["actual_usd"] == amount
+    assert closed["actual_tokens"] == reservation["reserved_tokens"]
+    assert closed["entry_id"] == reservation["entry_id"]
+    assert_denied(setup, task_id="other", budget=Budget(setup[2], {"usd_per_day": amount}),
+                  reason="budget_exceeded")
+    before = setup[2].read_bytes()
+    with pytest.raises(GateDenied) as error:
+        budget.settle("task", actual, None, reservation["epoch"])
+    assert error.value.reason == "already_settled"
+    assert setup[2].read_bytes() == before
+    monkeypatch.setattr(gate_module.time, "time", lambda: NOW + 2 * 86400)
+    send(setup, budget=Budget(setup[2], {"usd_per_day": 0.4, "calls_per_day": 1,
+                                      "tokens_per_day": 200000}))
+
+
+@pytest.mark.parametrize("late", [False, True])
+def test_stopped_task_requires_explicit_release(setup, late):
+    reservation = send(setup)
+    budget = Budget(setup[2], {})
+    if late:
+        budget.stop()
+    budget.settle("task", 0.8, 1, reservation["epoch"])
+    assert_denied(setup, reason="task_unavailable")
+    release = Budget(setup[2], {}).release("task", "reviewed overrun")
+    assert release["kind"] == "release"
+    assert release["entry_id"] == "test"
+    assert rows(setup[2])[-1] == release
+    # Release clears only the task stop, not historical budget consumption.
+    assert_denied(setup, budget=Budget(setup[2], {"usd_per_day": 0.8}),
+                  reason="budget_exceeded")
+    fresh = send(setup)
+    assert fresh["epoch"] > reservation["epoch"]
+    budget.settle("task", 0.8, 1, fresh["epoch"])
+    assert_denied(setup, reason="task_unavailable")
+    budget.release("task", "second review")
+    send(setup)
+
+
+def test_release_resets_expired_task_window(setup, monkeypatch):
+    budget = Budget(setup[2], {"seconds_per_task": 10})
+    reservation = send(setup, budget=budget)
+    monkeypatch.setattr(gate_module.time, "time", lambda: NOW + 11)
+    budget.settle("task", 0.4, 1, reservation["epoch"])
+    budget.release("task", "reviewed timeout")
+    assert send(setup, budget=budget)["deadline"] == NOW + 21
+
+
+def test_time_limit_uses_only_selected_entry_history(setup, monkeypatch):
+    setup[0]["caps"] = {"seconds_per_task": 10}
+    budget = Budget(setup[2], {})
+    reservation = send(setup, budget=budget)
+    budget.settle("task", 0.4, 1, reservation["epoch"])
+    monkeypatch.setattr(gate_module.time, "time", lambda: NOW + 11)
+    assert_denied(setup, budget=budget, reason="task_timeout")
+    other = dict(setup[0], id="other")
+    setup[1].write_text(json.dumps({"entries": [setup[0], other]}))
+    result = gate(setup[1], "other", ["https://api.example.test"], [("ok", "A")],
+                  10, budget, 1, 100000, 100000, "task")
+    assert result["deadline"] == NOW + 21
+
+
+def test_release_cannot_replay_old_stop_epoch(setup):
+    budget = Budget(setup[2], {})
+    first = send(setup)
+    budget.settle("task", 0.8, 1, first["epoch"])
+    release = budget.release("task", "first review")
+    second = send(setup)
+    budget.settle("task", 0.8, 1, second["epoch"])
+    with setup[2].open("a") as stream:
+        stream.write(json.dumps(release) + "\n")
+    assert_denied(setup, reason="ledger_release")
+
+
+@pytest.mark.parametrize("kind", ["reserve", "settle", "late", "release"])
+@pytest.mark.parametrize("invalid_id", [None, "", 1])
+def test_corrupt_entry_id_blocks_ledger_replay(setup, kind, invalid_id):
+    budget = Budget(setup[2], {})
+    reservation = send(setup)
+    if kind == "late":
+        budget.stop()
+    if kind != "reserve":
+        budget.settle("task", 0.8, 1, reservation["epoch"])
+    if kind == "release":
+        budget.release("task", "review")
+    ledger_rows = rows(setup[2])
+    ledger_rows[-1]["entry_id"] = invalid_id
+    setup[2].write_text("".join(json.dumps(row) + "\n" for row in ledger_rows))
+    assert_denied(setup, task_id="next", reason="ledger_entry")
+
+
+def test_settlement_entry_cannot_be_reassigned(setup):
+    reservation = send(setup)
+    Budget(setup[2], {}).settle("task", 0.4, 1, reservation["epoch"])
+    ledger_rows = rows(setup[2])
+    ledger_rows[-1]["entry_id"] = "other"
+    setup[2].write_text("".join(json.dumps(row) + "\n" for row in ledger_rows))
+    assert_denied(setup, task_id="next", reason="ledger_task")
+
+
+@pytest.mark.parametrize("reason", [None, "", " ", 1])
+def test_release_requires_reason(setup, reason):
+    reservation = send(setup)
+    budget = Budget(setup[2], {})
+    budget.settle("task", 0.8, 1, reservation["epoch"])
+    before = setup[2].read_bytes()
+    with pytest.raises(GateDenied) as error:
+        budget.release("task", reason)
+    assert error.value.reason == "invalid_release_reason"
+    assert setup[2].read_bytes() == before
+    assert_denied(setup, reason="task_unavailable")
+
+
+def test_release_cannot_clear_pending_or_unknown_task(setup):
+    reservation = send(setup)
+    budget = Budget(setup[2], {})
+    for task in ("task", "unknown"):
+        with pytest.raises(GateDenied) as error:
+            budget.release(task, "review")
+        assert error.value.reason == "task_not_stopped"
+    assert_denied(setup, reason="task_unavailable")
+    budget.settle("task", 0.8, 1, reservation["epoch"])
+    budget.release("task", FAKE_SECRET)
+    assert FAKE_SECRET not in setup[2].read_text()
+    before = setup[2].read_bytes()
+    with pytest.raises(GateDenied) as error:
+        budget.release("task", "duplicate")
+    assert error.value.reason == "task_not_stopped"
+    assert setup[2].read_bytes() == before
+
+
+@pytest.mark.parametrize("in_allowlist", [False, True])
+def test_non_ascii_host_cannot_lowercase_to_ascii(setup, in_allowlist):
+    setup[0]["hosts"] = ["\u212a.example.test" if in_allowlist else "k.example.test"]
+    hop = "https://k.example.test" if in_allowlist else "https://\u212a.example.test"
+    assert_denied(setup, hops=[hop], reason="invalid_host")
+
+
+@pytest.mark.parametrize("parts", [[(PRIVATE_PATH.lower(), "A")], [(PRIVATE_PATH.swapcase(), "A")],
+                                  [("/us", "A"), ("ers/example", "A")]])
+def test_private_paths_ignore_case(setup, parts):
+    assert classify(parts) == "C"
+    assert_denied(setup, parts=parts, reason="data_class_denied")
+
+
+@pytest.mark.parametrize("overrides,reason", [
+    ({"hops": ["https://unknown.test"]}, "host_not_allowed"),
+    ({"hops": ["https://api.example.test", "https://unknown.test"]}, "host_not_allowed"),
+    ({"hops": ["https://api.example.test", "https://unknown.test", "https://api.example.test"]},
+     "host_not_allowed"),
+    ({"parts": [("public", "B")]}, "data_class_denied"),
+])
+def test_fault_reason_codes(setup, overrides, reason):
+    assert_denied(setup, reason=reason, **overrides)
+
+
+def test_unknown_price_reason(setup):
+    setup[0]["price"] = None
+    assert_denied(setup, reason="unknown_price")
+
+
+def _process_reserve(ledger, entry, barrier, results):
+    """Spawn-safe worker: no sockets, APIs or subprocess commands."""
+    original_read = Budget._read
+
+    def slow_read(self, stream):
+        state = original_read(self, stream)
+        # Widen the read/write race: removing flock must overbook the cap.
+        gate_module.time.sleep(0.15)
+        return state
+
+    with patch.object(Budget, "_read", slow_read), patch.object(gate_module.time, "time", return_value=NOW):
+        barrier.wait(timeout=20)
+        try:
+            Budget(ledger, {"calls_per_day": 1}).reserve(entry, 1, 1, 1,
+                                                       str(multiprocessing.current_process().pid))
+        except GateDenied as error:
+            results.put(error.reason)
+        else:
+            results.put("reserved")
+
+
+def test_multiprocess_reservations_respect_cap(setup):
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(8)
+    results = context.Queue()
+    processes = [context.Process(target=_process_reserve, args=(setup[2], setup[0], barrier, results))
+                 for _ in range(8)]
+    try:
+        for process in processes:
+            process.start()
+        outcomes = [results.get(timeout=30) for _ in processes]
+        for process in processes:
+            process.join(timeout=20)
+            assert process.exitcode == 0
+        assert outcomes.count("reserved") == 1
+        assert outcomes.count("budget_exceeded") == 7
+        assert len(rows(setup[2])) == 1
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+            if process.pid is not None:
+                process.join(timeout=5)
+        results.close()
+        results.join_thread()
