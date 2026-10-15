@@ -3,6 +3,14 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-15 午後 振り分け役の方針の修正・Argon 壁打ち・Sakana Fugu の規約確認（司令塔: Claude Opus 5.5）
+- Mark の指示（原文の要旨は ADR に）: 利用者に AI を指定させず、ルミナスの内部で最も効率・低コスト・速い担当を選ぶ。国・ベンダー単位で止まっても切り替えて続ける。→ ADR `state/decisions/20261015-router-policy.md`・提案 `docs/proposals/20261015-router-v0.md`（Gemini 4 Argon と 3 往復、費用計 $0.107）
+- Gemini の名簿の行指定（`--entry`、モデル名の不一致は拒否）と Argon の行を追加。**司令塔の直接のコード修正**（Codex が利用枠の上限のため。CLAUDE.md の例外）: `orch/gemini.py`・`orch/config.py`（伏せ字の対象に SAKANA_API_KEY）・`tools/set_env_key.sh`（SAKANA_API_KEY の登録口）・`tests/test_gemini.py`。pytest 695 passed・5 skipped、hooks 247 passed、Opus 審査 APPROVE。コミット 50e7c65
+- Mark の決定: Sakana は学習利用のオプトアウト済み・鍵を登録済み・上限 1 日 $0.25。Mark の意向: Fugu を参考に、壁打ち・聞き出し・試してみる
+- **規約の確認で保留**: Sakana の利用規約が「競合する製品・サービスの開発」「仕組みの解析」を禁じ、利用ポリシーが「書面の承認のない試験・検証」を禁じる。ルミナスは有償分譲を目指すため、壁打ち・聞き出し・比較試験は当たる恐れが高い → Mark の判断まで行わない。`orch/fugu.py` と名簿の Fugu の行も保留。呼び出し 0 回・費用 $0。ADR `state/decisions/20261015-sakana-fugu.md`（コミット 2c3bca0）
+- 未解決（Mark の判断）: Sakana に書面で許可を求めるか／Fugu を使わずに進めるか。縮退運転の予備モデル。Genspark を調査役の候補にするか
+- 次の一手: 振り分け役 v0 の 1 週目（区分 C への強制引き上げと停止・名簿の法域と役割キーと停止スイッチ・1 行の記録・A/B を安い AI 1 つへ流す仮の通路）。Codex の枠が戻れば gate_followups から（Fable5・脳でんちを優先）
+
 ## 2026-10-15 素体: Mark の承認 1〜4 の反映と、ゲートの実際の呼び出しへの接続（司令塔: Claude Opus 5.5）
 - Mark の決定（原文）: 「1から4まで全て承認。」→ 名簿 v0 の承認（`config/roster.json` に approved_by Mark）・名簿を確認つきのファイルに（`.claude/settings.json` の ask に `Edit(/config/roster.json)`）・最終提案 §11 を既定値で確定・P0 の記録を開始（`state/p0/`。サイクル 0 の記録は司令塔が起こした）。ADR `state/decisions/20261015-baseline-approvals.md`
 - **ゲートを接続**: `orch/gemini.py`・`orch/jev.py` が呼び出しの直前に `orch/gate.py` を通る。送信区分の明示が必須（既定 None＝拒否。判断層は "A"）、リダイレクトを追わない、予約と精算、名簿の 1 日の上限が効く。拒否されたら既存の失敗経路（Gemini は rc=2→Claude、Jev は判断層のフォールバック）。名簿で役割の担当を切り替えて戻す `orch/roster.py`（ファイルは書かない）＝完成条件⑤の模擬試験。コミット `164721e`
