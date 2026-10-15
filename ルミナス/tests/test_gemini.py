@@ -321,3 +321,46 @@ def test_check_get_is_gated_and_never_redirects(keyed, monkeypatch, isolated_env
     adapter_roster.write_text(json.dumps(data))
     assert "budget_exceeded" in gemini.check_status()[1]
     get.assert_called_once()
+
+
+# ---- 名簿の行を指定して呼ぶ（Argon など。司令塔の直接修正、Codex が上限中） ----
+def _add_entry(adapter_roster, **kw):
+    import json
+    data = json.loads(adapter_roster.read_text())
+    base = dict(id="gemini-argon-sparring", role="壁打ち（別の視点）", provider="google", model="gemini-argon-test",
+                hosts=["gemini.example.test"], price={"input": 2.0, "output": 10.0}, caps={"usd_per_day": 0.25},
+                state="trial", max_data_class="A", version_kind="alias", evidence=[], rollback_to="stop",
+                review_by="2026-11-01")
+    base.update(kw)
+    data["entries"].append(base)
+    adapter_roster.write_text(json.dumps(data))
+
+
+def test_entry_id_uses_that_rows_model_and_price(keyed, monkeypatch, isolated_env, adapter_roster):
+    from unittest.mock import Mock
+    _add_entry(adapter_roster)
+    post = Mock(return_value=FakeResp(200, OK))
+    monkeypatch.setattr(gemini.requests, "post", post)
+    assert gemini.generate("public", data_class="A", entry_id="gemini-argon-sparring").rc == 0
+    assert "/models/gemini-argon-test:" in post.call_args.args[0]
+    rows = gate_rows(isolated_env)
+    assert rows[0]["entry_id"] == "gemini-argon-sparring"
+    # OK の使用量（入力 1000・出力 1000 想定）を、Argon の単価で精算している
+    assert rows[-1]["actual_usd"] == pytest.approx(gemini.cost_from_usage(OK["usageMetadata"], {"price": {"input": 2.0, "output": 10.0}}))
+
+
+@pytest.mark.parametrize("kw", [dict(state="hold"), dict(provider="typesafe")])
+def test_entry_id_unavailable_is_denied_before_network(keyed, monkeypatch, isolated_env, adapter_roster, kw):
+    _add_entry(adapter_roster, **kw)
+    monkeypatch.setattr(gemini.requests, "post", _no_call)
+    res = gemini.generate("public", data_class="A", entry_id="gemini-argon-sparring")
+    assert (res.rc, res.reason) == (2, "roster_selection")
+    assert gate_rows(isolated_env) == []
+
+
+def test_model_name_mismatch_is_denied(keyed, monkeypatch, isolated_env, adapter_roster):
+    _add_entry(adapter_roster)
+    monkeypatch.setattr(gemini.requests, "post", _no_call)
+    assert gemini.generate("public", data_class="A", model="other-model").reason == "model_mismatch"
+    assert gemini.generate("public", data_class="A", entry_id="gemini-argon-sparring", model="other").reason == "model_mismatch"
+    assert gate_rows(isolated_env) == []

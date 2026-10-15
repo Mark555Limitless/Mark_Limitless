@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 鍵を画面に表示せずに .env へ入れる（Mark 本人が端末で実行する。Claude は実行しない・値を読まない）。
-# 使い方: bash tools/set_env_key.sh GEMINI_API_KEY | TYPESAFE_API_KEY
+# 使い方: bash tools/set_env_key.sh GEMINI_API_KEY | TYPESAFE_API_KEY | SAKANA_API_KEY
 # - 入力は画面に出ない。端末以外（パイプ・エージェント）からの入力は受け付けない
 # - 既存の .env を非公開フォルダ（既定: ルミナスの隣の ルミナス_非公開/env_backups/.env.bak.<日時>、権限 600）へ控えてから書き換える
 # - 書き込みは権限 600 の一時ファイルに書いてから置き換える（途中の失敗で鍵が 644 のまま残らない）。どの段で失敗しても止まる
@@ -11,7 +11,7 @@ main() {
   local PROJ VAR PRIV VAL BAK D
   PROJ="$(cd "$(dirname "$0")/.." && pwd)"
   VAR="${1:-}"
-  case "$VAR" in GEMINI_API_KEY|TYPESAFE_API_KEY) ;; *) echo "使い方: $0 GEMINI_API_KEY|TYPESAFE_API_KEY" >&2; return 2;; esac
+  case "$VAR" in GEMINI_API_KEY|TYPESAFE_API_KEY|SAKANA_API_KEY) ;; *) echo "使い方: $0 GEMINI_API_KEY|TYPESAFE_API_KEY|SAKANA_API_KEY" >&2; return 2;; esac
   [ -t 0 ] || { echo "set_env_key: 端末から直接実行してください（パイプやエージェント経由の入力は受け付けません）" >&2; return 2; }
   PRIV="${LUMINOUS_PRIVATE_DIR:-$(dirname "$PROJ")/ルミナス_非公開}"
   case "$PRIV" in /*) ;; *) PRIV="$PWD/$PRIV";; esac   # 相対パスは今いる場所を基にする（git -C で別の場所から判定しても同じ所を指すように）
@@ -71,6 +71,8 @@ PY
   if [ "$VAR" = GEMINI_API_KEY ]; then
     env -u GEMINI_API_KEY -u TYPESAFE_API_KEY "$PYBIN" -m orch.gemini check \
       || echo "set_env_key: 保存はできましたが、疎通確認は通りませんでした（上の表示を確認）" >&2
+  elif [ "$VAR" = SAKANA_API_KEY ]; then
+    echo "（Sakana の呼び出し口は未実装のため、疎通確認は呼び出し口ができてから行います）"
   else
     env -u GEMINI_API_KEY -u TYPESAFE_API_KEY "$PYBIN" -m orch.decisions --check \
       && echo "（Jev の実呼び出しは JEV_ENABLED=1 の上で python3 -m orch.decisions --demo --backend jev。1回 約 \$0.0001）"

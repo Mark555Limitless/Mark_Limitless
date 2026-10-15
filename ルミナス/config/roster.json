@@ -99,6 +99,22 @@
       "review_by": "2026-11-15"
     },
     {
+      "id": "gemini-argon-sparring",
+      "role": "壁打ち（別の視点）",
+      "provider": "google",
+      "model": "gemini-4-argon",
+      "version_kind": "alias",
+      "state": "trial",
+      "max_data_class": "A",
+      "hosts": ["generativelanguage.googleapis.com"],
+      "channel": "python3 -m orch.gemini gen --entry gemini-argon-sparring --data-class A",
+      "price": {"input": 2.0, "output": 10.0, "unit": "usd_per_mtok", "checked": "2026-10-14", "note": "導入価格。のち 4.0/20.0 の予定（調査員報告・未照合）"},
+      "caps": {"usd_per_day": 0.25},
+      "evidence": [{"url": "https://ai.google.dev/gemini-api/docs/models/gemini-4-argon", "checked": "2026-10-14", "tier": 1, "kind": "vendor"}],
+      "rollback_to": "停止",
+      "review_by": "2026-11-15"
+    },
+    {
       "id": "jev-signal",
       "role": "構造化判断の信号（止める側だけ）",
       "provider": "typesafe",

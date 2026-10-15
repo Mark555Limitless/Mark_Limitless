@@ -30,6 +30,10 @@ tests/test_tools.py
 5. **（軽 a）** リダイレクトの試験は、正しい answers を含む本文でも失敗になることを確かめる形にする（gemini・jev とも）。
 6. **（軽 c・d）** 既存の試験が本物の `config/roster.json` を読まないよう、`adapter_roster` を `tests/conftest.py` へ移し、gemini・jev・decisions の試験で使う（自動で効く fixture にしてよい）。
 
+7. **（Gemini の行指定の審査・中）** Gemini 全体の 1 日の上限（`daily_cap`）を、呼ぶ前に「当日の実額＋今回の見込み額」で判定する（今は当日の実額だけで判定し、上限の直前から 1 回分〔Argon なら約 $0.082〕超えうる。名簿の行ごとの上限は行ごとに数えるので、Flash と Argon の合計は daily_cap だけが抑えている）。
+8. **（同・中）** `check_status` にも、名簿の行と使うモデル名の一致確認を入れる（不一致なら点検でも拒否と表示）。
+9. **（同・低）** 試験の追加: 存在しない id／state=adopted が通る／ORCH_GEMINI_MODEL が名簿と違うと拒否・同じなら通る／CLI の `--entry` が渡る。
+
 ## テスト
 - role_key で選べる／role_key が無ければ日本語名で選べる／role_key と名簿が食い違えば拒否（通信しない）。
 - scope_check: 実行中の gate_ledger への追記（正しい JSON 行）は違反にならない、壊れた行・負の数・既存部分の書き換えは違反。

@@ -22,6 +22,7 @@ SECRET_ENV_NAMES = (
     "OPENAI_API_KEY",
     "OPENROUTER_API_KEY",
     "ANTHROPIC_API_KEY",
+    "SAKANA_API_KEY",
 )
 _GENERIC_SECRET = re.compile(
     r"(sk-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{30,}|AQ\.[A-Za-z0-9_-]{20,}|Bearer\s+[A-Za-z0-9._-]{12,})"

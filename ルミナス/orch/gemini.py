@@ -46,10 +46,17 @@ class Result:
     usage: Dict[str, Any] = field(default_factory=dict)
 
 
-def _roster():
+def _roster(entry_id: Optional[str] = None):
+    """名簿から行を選ぶ。entry_id を渡せばその行（同じ提供元・状態が adopted/trial のときだけ）、無ければ役割で選ぶ。"""
     path = config.env("ORCH_ROSTER") or config.ROOT / "config" / "roster.json"
     try:
-        entry = roster.active(gate.load_roster(path), ROLE)
+        data = gate.load_roster(path)
+        if entry_id is None:
+            entry = roster.active(data, ROLE)
+        else:
+            entry = next((e for e in data["entries"] if e["id"] == entry_id), None)
+            if entry is None or entry.get("provider") != "google" or entry.get("state") not in ("adopted", "trial"):
+                raise ValueError("entry_unavailable")
     except ValueError:
         raise gate.GateDenied("roster_selection") from None
     if not isinstance(entry["hosts"], list) or not entry["hosts"]:
@@ -182,6 +189,7 @@ def generate(
     timeout: float = 240,
     purpose: str = "",
     data_class: Optional[str] = None,
+    entry_id: Optional[str] = None,
 ) -> Result:
     m = model or config.env("ORCH_GEMINI_MODEL") or ""
     t0 = time.monotonic()
@@ -204,8 +212,17 @@ def generate(
         return finish(Result(2, REQUESTS_MISSING))
 
     try:
-        roster_path, entry = _roster()
-        m = _model(model, entry)
+        roster_path, entry = _roster(entry_id)
+        if entry_id is not None:
+            # 行を指定したら、その行のモデルだけを使う（別のモデル名で呼ぶと、名簿の単価と食い違い費用を誤って記録するため）
+            if model and model != entry["model"]:
+                raise gate.GateDenied("model_mismatch")
+            m = entry["model"]
+        else:
+            m = _model(model, entry)
+            if m != entry["model"]:
+                # 名簿の行と違うモデルで呼ぶと、その行の単価で費用を誤って記録する（例: Argon を Flash の単価で）
+                raise gate.GateDenied("model_mismatch")
         url = f"https://{entry['hosts'][0]}/v1beta/models/{m}:generateContent"
         budget = gate.Budget(config.data_dir() / "gate_ledger.jsonl", {})
     except gate.GateDenied as error:
@@ -346,6 +363,7 @@ def main(argv: Optional[list] = None) -> int:
     g = sub.add_parser("gen")
     g.add_argument("--purpose", default="")
     g.add_argument("--model", default=None)
+    g.add_argument("--entry", default=None, help="名簿の行の id（その行のモデル・単価・上限で呼ぶ）")
     g.add_argument("--data-class", choices=("A", "B", "C"), default=None)
     g.add_argument("--thinking", default=None)
     g.add_argument("--timeout", type=float, default=240)
@@ -360,7 +378,7 @@ def main(argv: Optional[list] = None) -> int:
         return 2
     try:
         res = generate(prompt, model=a.model, thinking=a.thinking or config.env("ORCH_GEMINI_THINKING", "high"),
-                       timeout=a.timeout, purpose=a.purpose, data_class=a.data_class)
+                       timeout=a.timeout, purpose=a.purpose, data_class=a.data_class, entry_id=a.entry)
     except config.GlobalHalt as e:
         print(f"gemini: {e}", file=sys.stderr)
         return config.HALT_EXIT_CODE
