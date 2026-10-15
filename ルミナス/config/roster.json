@@ -129,6 +129,23 @@
       "evidence": [{"url": "docs/jev-value-study.md", "checked": "2026-10-08", "tier": 2, "kind": "third_party"}],
       "rollback_to": "Claude の判断層（haiku→sonnet）→既定値",
       "review_by": "2026-11-15"
+    },
+    {
+      "id": "sakana-fugu-max",
+      "role": "外部オーケストレーターの実測",
+      "provider": "sakana",
+      "model": "fugu-max",
+      "version_kind": "alias",
+      "state": "trial",
+      "max_data_class": "A",
+      "hosts": ["api.sakana.ai"],
+      "channel": "python3 -m orch.fugu gen --data-class A",
+      "price": {"input": 2.0, "output": 6.0, "unit": "usd_per_mtok", "checked": "2026-10-15", "note": "内部の Web 道具は 1 回 $0.007（応答から回数が分からないことがある）"},
+      "caps": {"usd_per_day": 0.25},
+      "evidence": [{"url": "https://console.sakana.ai/pricing", "checked": "2026-10-15", "tier": 1, "kind": "vendor"}],
+      "rollback_to": "停止",
+      "review_by": "2026-11-15",
+      "note": "Mark の指示（2026-10-15）で応答速度・正答・費用の実測だけに使う。Fugu に構成・振り分け方を尋ねない（規約）。ADR state/decisions/20261015-sakana-fugu.md"
     }
   ]
 }
