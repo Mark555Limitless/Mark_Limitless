@@ -12,6 +12,8 @@ rc: 0=成功 / 2=基盤の失敗（タイムアウト・未認証・上限到達
 from __future__ import annotations
 
 import argparse
+import json
+import uuid
 import sys
 import threading
 import time
@@ -29,10 +31,9 @@ try:
 except ImportError:
     requests = None  # type: ignore[assignment]
 
-from . import config, usage
+from . import config, gate, roster, usage
 
-BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-DEFAULT_MODEL = "gemini-3.8-flash"
+ROLE = "下書き・別の視点"
 UNKNOWN_USAGE_USD = 0.05  # 使用量が分からない応答・通信例外は控えめにこの額を計上する
 REQUESTS_MISSING = "requests 未導入"  # 呼ばなかった（回数・費用に数えない）
 
@@ -45,13 +46,24 @@ class Result:
     usage: Dict[str, Any] = field(default_factory=dict)
 
 
-def _model(model: Optional[str]) -> str:
-    return model or config.env("ORCH_GEMINI_MODEL", DEFAULT_MODEL) or DEFAULT_MODEL
+def _roster():
+    path = config.env("ORCH_ROSTER") or config.ROOT / "config" / "roster.json"
+    try:
+        entry = roster.active(gate.load_roster(path), ROLE)
+    except ValueError:
+        raise gate.GateDenied("roster_selection") from None
+    if not isinstance(entry["hosts"], list) or not entry["hosts"]:
+        raise gate.GateDenied("no_hosts")
+    return path, entry
 
 
-def _prices() -> Tuple[float, float]:
-    # 既定は gemini-3.8-flash の $0.75 / $3.75（100万トークンあたり）。2027-01 から $1.50 / $7.50 に上がる予定（要確認）
-    return config.env_float("ORCH_GEMINI_PRICE_IN", 0.75), config.env_float("ORCH_GEMINI_PRICE_OUT", 3.75)
+def _model(model: Optional[str], entry=None) -> str:
+    return model or config.env("ORCH_GEMINI_MODEL") or (entry or _roster()[1])["model"]
+
+
+def _prices(entry=None) -> Tuple[float, float]:
+    price = (entry or _roster()[1])["price"]
+    return price["input"], price["output"]
 
 
 def _int(x: Any) -> int:
@@ -63,8 +75,8 @@ def _int(x: Any) -> int:
         return 0
 
 
-def cost_from_usage(md: Dict[str, Any]) -> float:
-    p_in, p_out = _prices()
+def cost_from_usage(md: Dict[str, Any], entry=None) -> float:
+    p_in, p_out = _prices(entry)
     prompt = _int(md.get("promptTokenCount"))
     out = _int(md.get("candidatesTokenCount")) + _int(md.get("thoughtsTokenCount"))
     return (prompt * p_in + out * p_out) / 1_000_000
@@ -84,8 +96,8 @@ def _post_with_timeout(url: str, headers: Dict[str, str], body: Dict[str, Any], 
 
     def run() -> None:
         try:
-            box["resp"] = requests.post(url, headers=headers, json=body, timeout=(10, timeout))
-        except Exception as e:  # noqa: BLE001 呼び出し元で種類ごとに扱う
+            box["resp"] = requests.post(url, headers=headers, json=body, timeout=(min(10, timeout), timeout), allow_redirects=False)
+        except BaseException as e:  # 中断も呼び出し元へ戻して予約を閉じる
             box["err"] = e
 
     th = threading.Thread(target=run, daemon=True)
@@ -107,7 +119,7 @@ def _thinking_rejected(resp: requests.Response) -> bool:
         return False
 
 
-def _log(model: str, res: Result, sec: float, usd: float, purpose: str) -> None:
+def _log(model: str, res: Result, sec: float, usd: float, purpose: str, *, skipped: bool = False) -> None:
     """1回1行。本文・生のエラー・鍵は書かない。記録の失敗で本流を止めない。"""
     md = res.usage if isinstance(res.usage, dict) else {}
     tin = _int(md.get("promptTokenCount"))
@@ -124,7 +136,7 @@ def _log(model: str, res: Result, sec: float, usd: float, purpose: str) -> None:
                 fh.write(config.redact(line) + "\n")
     except OSError:
         pass
-    status = "ok" if res.rc == 0 else ("skip" if res.reason in ("停止中", "上限到達", "鍵なし", "全体停止中", REQUESTS_MISSING) else "error")
+    status = "ok" if res.rc == 0 else ("skip" if skipped or res.reason in ("停止中", "上限到達", "鍵なし", "全体停止中", REQUESTS_MISSING) else "error")
     try:
         usage.record("gemini", model=model, purpose=purpose, calls=0 if status == "skip" else 1,
                      in_tokens=tin, out_tokens=tout + think, usd=usd, status=status, ms=int(sec * 1000))
@@ -132,7 +144,7 @@ def _log(model: str, res: Result, sec: float, usd: float, purpose: str) -> None:
         pass
 
 
-def _parse(data: Any) -> Tuple[Result, float]:
+def _parse(data: Any, entry=None) -> Tuple[Result, float]:
     """応答を解析する。形が崩れていても例外を出さず rc=3 にする。"""
     if not isinstance(data, dict):
         return Result(3, "解析失敗"), UNKNOWN_USAGE_USD
@@ -140,7 +152,7 @@ def _parse(data: Any) -> Tuple[Result, float]:
     md = md if isinstance(md, dict) else {}
     known = any(isinstance(md.get(k), int) and not isinstance(md.get(k), bool)
                 for k in ("promptTokenCount", "candidatesTokenCount", "thoughtsTokenCount"))
-    usd = cost_from_usage(md) if known else UNKNOWN_USAGE_USD  # 使用量が読めないときは控えめに計上
+    usd = cost_from_usage(md, entry) if known else UNKNOWN_USAGE_USD  # 使用量が読めないときは控えめに計上
     pf = data.get("promptFeedback")
     if isinstance(pf, dict) and pf.get("blockReason"):
         return Result(3, "安全フィルタ", usage=md), usd
@@ -169,12 +181,13 @@ def generate(
     thinking: Optional[str] = "high",
     timeout: float = 240,
     purpose: str = "",
+    data_class: Optional[str] = None,
 ) -> Result:
-    m = _model(model)
+    m = model or config.env("ORCH_GEMINI_MODEL") or ""
     t0 = time.monotonic()
 
-    def finish(res: Result, usd: float = 0.0) -> Result:
-        _log(m, res, time.monotonic() - t0, usd, purpose)
+    def finish(res: Result, usd: float = 0.0, *, skipped: bool = False) -> Result:
+        _log(m, res, time.monotonic() - t0, usd, purpose, skipped=skipped)
         return res
 
     if config.global_halt():   # 全体停止は失敗ではなく本流も止める（docs/specs/20261008_global_halt.md）
@@ -190,48 +203,97 @@ def generate(
     if requests is None:
         return finish(Result(2, REQUESTS_MISSING))
 
-    url = f"{BASE}/{m}:generateContent"
+    try:
+        roster_path, entry = _roster()
+        m = _model(model, entry)
+        url = f"https://{entry['hosts'][0]}/v1beta/models/{m}:generateContent"
+        budget = gate.Budget(config.data_dir() / "gate_ledger.jsonl", {})
+    except gate.GateDenied as error:
+        return finish(Result(2, error.reason), skipped=True)
     headers = {"x-goog-api-key": key, "Content-Type": "application/json"}
     gen_cfg: Dict[str, Any] = {"maxOutputTokens": int(max_output_tokens)}
     if thinking:
         gen_cfg["thinkingConfig"] = {"thinkingLevel": thinking}
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": gen_cfg}
+    task = uuid.uuid4().hex
 
-    try:
-        resp = _post_with_timeout(url, headers, body, timeout)
-        if thinking and _thinking_rejected(resp):
-            gen_cfg.pop("thinkingConfig", None)  # モデルに拒まれたら外して1回だけ送り直す
-            resp = _post_with_timeout(url, headers, body, timeout)
-    except TimeoutError:
-        return finish(Result(2, "タイムアウト"), UNKNOWN_USAGE_USD)
-    except Exception:  # noqa: BLE001 通信の例外はすべて基盤の失敗（生のエラーは記録しない）
-        return finish(Result(2, "通信失敗"), UNKNOWN_USAGE_USD)
+    for attempt in range(2):
+        if config.global_halt():
+            finish(Result(config.HALT_EXIT_CODE, "全体停止中"))
+            raise config.GlobalHalt()
+        # No separate input-length limit exists in this adapter. Reserve from
+        # the complete wire body (UTF-8 bytes conservatively bound text tokens).
+        wire = json.dumps(body, ensure_ascii=False)
+        try:
+            reservation = gate.gate(roster_path, entry["id"], [url], [(wire, data_class)],
+                                    len(wire), budget, 1, len(wire.encode("utf-8")),
+                                    gen_cfg["maxOutputTokens"], task)
+        except gate.GateDenied as error:
+            return finish(Result(2, error.reason), skipped=True)
+        usd, tokens = UNKNOWN_USAGE_USD, reservation["reserved_tokens"]
+        retry = False
+        try:
+            wait = float(timeout)
+            if reservation["deadline"] is not None:
+                wait = min(wait, reservation["deadline"] - time.time())
+            if wait <= 0:
+                raise TimeoutError()
+            resp = _post_with_timeout(url, headers, body, wait)
+            retry = attempt == 0 and bool(thinking) and _thinking_rejected(resp)
+            res, usd = _response(resp, entry)
+            md = res.usage
+            if any(type(md.get(k)) is int and md[k] >= 0 for k in
+                   ("promptTokenCount", "candidatesTokenCount", "thoughtsTokenCount")):
+                tokens = sum(max(0, _int(md.get(k))) for k in
+                             ("promptTokenCount", "candidatesTokenCount", "thoughtsTokenCount"))
+            elif usd == 0:
+                tokens = 0
+        except TimeoutError:
+            res = Result(2, "タイムアウト")
+        except Exception:
+            res = Result(2, "通信失敗")
+        finally:
+            try:
+                budget.settle(task, usd, tokens, reservation["epoch"])
+            except gate.GateDenied as error:
+                # Keep the reservation charged if settlement cannot be recorded.
+                try:
+                    budget.stop(reservation["epoch"])
+                except gate.GateDenied:
+                    pass  # An unreadable ledger itself blocks subsequent calls.
+                res, retry = Result(2, error.reason), False
+        if retry:
+            gen_cfg.pop("thinkingConfig", None)
+            continue
+        return finish(res, usd)
 
+
+def _response(resp, entry) -> Tuple[Result, float]:
     code = getattr(resp, "status_code", 0)
     text = getattr(resp, "text", "") or ""
-    # 4xx は処理前に拒否されたと分かるので計上しない。5xx は処理されたか不明なので控えめに計上する
     if code in (401, 403):
-        return finish(Result(2, "未認証"))
+        return Result(2, "未認証"), 0.0
     if code == 429 or (code != 200 and "RESOURCE_EXHAUSTED" in text):
-        return finish(Result(2, "上限到達(429)"))
+        return Result(2, "上限到達(429)"), 0.0
     if code >= 500:
-        return finish(Result(2, "API障害"), UNKNOWN_USAGE_USD)
+        return Result(2, "API障害"), UNKNOWN_USAGE_USD
     if code != 200:
-        return finish(Result(2, f"API障害(HTTP {code})"))
+        return Result(2, f"API障害(HTTP {code})"), 0.0
     try:
-        data = resp.json()
-    except Exception:  # noqa: BLE001 JSON でない応答
-        return finish(Result(3, "解析失敗"), UNKNOWN_USAGE_USD)
-    try:
-        res, usd = _parse(data)
-    except Exception:  # noqa: BLE001 想定外の形でも本流を止めない
-        res, usd = Result(3, "解析失敗"), UNKNOWN_USAGE_USD
-    return finish(res, usd)
+        return _parse(resp.json(), entry)
+    except Exception:
+        return Result(3, "解析失敗"), UNKNOWN_USAGE_USD
 
 
 def check_status(*, net: bool = True, net_timeout: float = 20) -> Tuple[bool, str]:
     """鍵の有無・短い疎通確認（本文は送らない）・当日の支出と上限を1行で返す。"""
-    m = _model(None)
+    if config.global_halt():   # 名簿が壊れていても全体停止を先に表示する
+        return False, "gemini: 全体停止中"
+    try:
+        roster_path, entry = _roster()
+        m = _model(None, entry)
+    except gate.GateDenied as error:
+        return False, f"gemini: {error.reason}"
     spend = f"本日 ${daily_usd():.2f}／上限 ${daily_cap():.2f}"
     if config.global_halt():
         return False, f"gemini: 全体停止中 model={m} {spend}"
@@ -244,11 +306,34 @@ def check_status(*, net: bool = True, net_timeout: float = 20) -> Tuple[bool, st
         return False, f"gemini: {REQUESTS_MISSING}（bash scripts/setup.sh） model={m} {spend}"
     if not net:
         return True, f"gemini: 鍵あり（疎通は未確認） model={m} {spend}"
+    task = uuid.uuid4().hex
+    budget = gate.Budget(config.data_dir() / "gate_ledger.jsonl", {})
+    url = f"https://{entry['hosts'][0]}/v1beta/models/{m}"
     try:
-        r = requests.get(f"{BASE}/{m}", headers={"x-goog-api-key": key}, timeout=net_timeout)
+        reservation = gate.gate(roster_path, entry["id"], [url], [(m, "A")], len(m),
+                                budget, 1, 0, 0, task)
+    except gate.GateDenied as error:
+        _log(m, Result(2, error.reason), 0, 0, "check", skipped=True)
+        return False, f"gemini: {error.reason}"
+    try:
+        wait = net_timeout
+        if reservation["deadline"] is not None:
+            wait = min(wait, reservation["deadline"] - time.time())
+        if wait <= 0:
+            raise TimeoutError()
+        r = requests.get(url, headers={"x-goog-api-key": key}, timeout=wait, allow_redirects=False)
         auth = {200: "OK", 401: "未認証", 403: "未認証", 404: "モデル名なし"}.get(r.status_code, f"HTTP {r.status_code}")
-    except requests.RequestException:
+    except Exception:
         auth = "不通"
+    finally:
+        try:
+            budget.settle(task, 0, 0, reservation["epoch"])
+        except gate.GateDenied as error:
+            try:
+                budget.stop(reservation["epoch"])
+            except gate.GateDenied:
+                pass
+            auth = error.reason
     return auth == "OK", f"gemini: 認証={auth} model={m} {spend}"
 
 
@@ -261,6 +346,7 @@ def main(argv: Optional[list] = None) -> int:
     g = sub.add_parser("gen")
     g.add_argument("--purpose", default="")
     g.add_argument("--model", default=None)
+    g.add_argument("--data-class", choices=("A", "B", "C"), default=None)
     g.add_argument("--thinking", default=None)
     g.add_argument("--timeout", type=float, default=240)
     a = ap.parse_args(argv)
@@ -274,7 +360,7 @@ def main(argv: Optional[list] = None) -> int:
         return 2
     try:
         res = generate(prompt, model=a.model, thinking=a.thinking or config.env("ORCH_GEMINI_THINKING", "high"),
-                       timeout=a.timeout, purpose=a.purpose)
+                       timeout=a.timeout, purpose=a.purpose, data_class=a.data_class)
     except config.GlobalHalt as e:
         print(f"gemini: {e}", file=sys.stderr)
         return config.HALT_EXIT_CODE

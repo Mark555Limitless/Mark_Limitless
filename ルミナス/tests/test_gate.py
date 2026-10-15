@@ -249,7 +249,7 @@ def test_json_price_cannot_lose_precision_during_loading(setup, number):
 def test_invalid_budget_cannot_bypass_reservation(setup, bad):
     assert_denied(setup, budget=bad)
     if isinstance(bad, Mock):
-        bad.reserve.assert_not_called()
+        bad._reserve.assert_not_called()
 
 
 @pytest.mark.parametrize("caps", [{"usd_per_day": "1"}, {"usd_per_day": -1},
@@ -282,7 +282,7 @@ def test_detector_fail_closed(setup, mode):
         if mode == "raise":
             raise RuntimeError(FAKE_SECRET)
         return True if mode == "true" else None
-    assert_denied(setup, detector=detector, reason="detector_failed_or_denied")
+    assert_denied(setup, detector=detector, reason="detector_error" if mode == "raise" else "detector_denied")
 
 
 def test_detector_safe_and_combined(setup):
@@ -484,9 +484,11 @@ def test_old_settled_usage_does_not_count_today(setup, monkeypatch):
 
 
 def test_concurrent_reservations_respect_cap(setup):
+    path = write_roster(setup)
     def reserve(index):
         try:
-            return Budget(setup[2], {"calls_per_day": 1}).reserve(setup[0], 1, 1, 1, str(index))
+            return gate(path, "test", ["https://api.example.test"], [("ok", "A")], 2,
+                        Budget(setup[2], {"calls_per_day": 1}), 1, 1, 1, str(index))
         except GateDenied:
             return None
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -792,7 +794,7 @@ def test_unknown_price_reason(setup):
     assert_denied(setup, reason="unknown_price")
 
 
-def _process_reserve(ledger, entry, barrier, results):
+def _process_reserve(ledger, path, barrier, results):
     """Spawn-safe worker: no sockets, APIs or subprocess commands."""
     original_read = Budget._read
 
@@ -805,8 +807,9 @@ def _process_reserve(ledger, entry, barrier, results):
     with patch.object(Budget, "_read", slow_read), patch.object(gate_module.time, "time", return_value=NOW):
         barrier.wait(timeout=20)
         try:
-            Budget(ledger, {"calls_per_day": 1}).reserve(entry, 1, 1, 1,
-                                                       str(multiprocessing.current_process().pid))
+            gate(path, "test", ["https://api.example.test"], [("ok", "A")], 2,
+                 Budget(ledger, {"calls_per_day": 1}), 1, 1, 1,
+                 str(multiprocessing.current_process().pid))
         except GateDenied as error:
             results.put(error.reason)
         else:
@@ -814,10 +817,11 @@ def _process_reserve(ledger, entry, barrier, results):
 
 
 def test_multiprocess_reservations_respect_cap(setup):
+    path = write_roster(setup)
     context = multiprocessing.get_context("spawn")
     barrier = context.Barrier(8)
     results = context.Queue()
-    processes = [context.Process(target=_process_reserve, args=(setup[2], setup[0], barrier, results))
+    processes = [context.Process(target=_process_reserve, args=(setup[2], path, barrier, results))
                  for _ in range(8)]
     try:
         for process in processes:
@@ -837,3 +841,52 @@ def test_multiprocess_reservations_respect_cap(setup):
                 process.join(timeout=5)
         results.close()
         results.join_thread()
+
+
+@pytest.mark.parametrize("kind", ["reserve", "settle", "late", "release"])
+def test_legacy_row_without_entry_id_has_specific_reason(setup, kind):
+    reservation = send(setup)
+    budget = Budget(setup[2], {})
+    if kind == "late":
+        budget.stop()
+    if kind != "reserve":
+        budget.settle("task", 0.8, 1, reservation["epoch"])
+    if kind == "release":
+        budget.release("task", "review")
+    ledger = rows(setup[2])
+    del ledger[-1]["entry_id"]
+    setup[2].write_text("".join(json.dumps(row) + "\n" for row in ledger))
+    assert_denied(setup, task_id="next", reason="ledger_entry")
+
+
+def test_release_keeps_other_entry_time_window(setup, monkeypatch):
+    setup[0]["caps"] = {"seconds_per_task": 10}
+    budget = Budget(setup[2], {})
+    first = send(setup)
+    budget.settle("task", 0.4, 1, first["epoch"])
+    monkeypatch.setattr(gate_module.time, "time", lambda: NOW + 5)
+    setup[1].write_text(json.dumps({"entries": [setup[0], dict(setup[0], id="other")]}))
+    other = gate(setup[1], "other", ["https://api.example.test"], [("ok", "A")],
+                 2, budget, 1, 100000, 100000, "task")
+    budget.settle("task", 0.8, 1, other["epoch"])
+    budget.release("task", "review other only")
+    monkeypatch.setattr(gate_module.time, "time", lambda: NOW + 11)
+    assert_denied(setup, reason="task_timeout")
+
+
+def test_reservation_is_internal_and_gate_enforces_roster_caps(setup):
+    assert not hasattr(Budget, "reserve")
+    setup[0]["caps"] = {"calls_per_day": 0}
+    assert_denied(setup, budget=Budget(setup[2], {"calls_per_day": 100}), reason="budget_exceeded")
+
+
+def test_human_closes_abandoned_reservation_at_estimate(setup):
+    reservation = send(setup)
+    budget = Budget(setup[2], {})
+    budget.stop()
+    closed = budget.settle("task", None, None, reservation["epoch"])
+    assert closed["kind"] == "late"
+    assert closed["actual_usd"] == reservation["estimated_usd"]
+    assert closed["actual_tokens"] == reservation["reserved_tokens"]
+    assert_denied(setup, task_id="next", budget=Budget(setup[2], {"usd_per_day": 0.4}),
+                  reason="budget_exceeded")

@@ -217,7 +217,7 @@ def _jev_meta(q: Question, raw: Any) -> Dict[str, Any]:
 
 
 def _from_jev(state: str, questions: Dict[str, Question], timeout_s: float, purpose: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    raw = jev.call(state, {k: q.wire() for k, q in questions.items()}, timeout_s=timeout_s, purpose=purpose)
+    raw = jev.call(state, {k: q.wire() for k, q in questions.items()}, timeout_s=timeout_s, purpose=purpose, data_class="A")
     out: Dict[str, Any] = {}
     meta: Dict[str, Any] = {}
     for k, q in questions.items():

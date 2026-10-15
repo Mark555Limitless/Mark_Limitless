@@ -5,6 +5,8 @@ import time
 
 import pytest
 
+from tests.test_roster import adapter_roster
+
 from orch import decisions, jev
 from orch.decisions import Choice, DecisionBudget, Noul, Score
 
@@ -330,3 +332,24 @@ def test_demo_exits_7_and_check_reports_when_halted(isolated_env, capsys):
     assert decisions.main(["--check"]) == 0
     assert "全体停止中" in capsys.readouterr().out
 
+
+
+# ---- ゲートの接続（指示書 20261015_gate_wiring。Codex が上限で止まったため司令塔が追加） ----
+def test_jev_is_called_with_public_data_class(jev_on, monkeypatch):
+    seen = {}
+
+    def call(state, q, **k):
+        seen.update(k)
+        return {"topic": {"type": "choice", "choice": "food"}, "polite": {"type": "score", "score": 2.0},
+                "question": {"type": "noul", "noul": 0.2}}
+    monkeypatch.setattr(jev, "call", call)
+    decisions.ask("s", QS)
+    assert seen["data_class"] == "A"
+
+
+def test_gate_denial_falls_back_to_anthropic(jev_on, monkeypatch, isolated_env, adapter_roster):
+    monkeypatch.setenv("JEV_ENDPOINT", "https://not-in-roster.example.test/v1/systemone")
+    monkeypatch.setattr(jev.requests, "post", lambda *a, **k: pytest.fail("ゲートの外へ通信してはいけない"))
+    monkeypatch.setattr(decisions, "_from_anthropic", lambda s, q, t, p: {"topic": "food", "polite": 0, "question": 0.1})
+    d = decisions.ask("s", QS)
+    assert d.backend == "anthropic" and d.answers["topic"] == "food" and "jev:" in d.reason

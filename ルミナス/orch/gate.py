@@ -4,12 +4,11 @@ Budget uses a dedicated regular JSONL file, locked on that file (POSIX). Its
 parent must already exist and its fixed path must not be replaced or truncated.
 Days and calendar months use JST. Limits and accounting are per roster entry.
 Roster and caller caps are combined using the smaller limit for each key.
-Settlements
-replace estimates; outstanding reservations from earlier days still consume
+Settlements replace estimates; outstanding reservations from earlier days consume
 today's budget. Cross-day settlements charge actual usage on settlement day.
 Task identifiers are ledger-wide (including duplicate/stop checks) and hashed
-before persistence. Each reservation has a unique
-epoch; stop(epoch) invalidates that epoch and all earlier ones, durably.
+before persistence. Each reservation has a unique epoch; stop(epoch) invalidates
+that epoch and all earlier ones, durably.
 Late replies close reservations for accounting only, once, on receipt day.
 Stopped tasks require an explicit human release; the gate never releases them.
 The ledger must be retained: after deletion/truncation, a new process cannot
@@ -18,9 +17,10 @@ prevents an old response from settling a new reservation in a recreated ledger.
 Money is calculated exactly; JSON numbers that would lose decimal precision
 are refused. Integral amounts remain integers in the ledger.
 seconds_per_task measures wall time since the task's first reservation for that
-entry, across
-restarts. Returned deadlines must also be enforced by the calling adapter;
+entry, across restarts. Returned deadlines must also be enforced by the adapter;
 this offline module cannot interrupt a running request.
+この変更より前のゲートの台帳は作り直す（entry_id の無い行は ledger_entry）。
+失われた使用履歴をゼロと扱わず、人が未精算額・上限を確認してから移行する。
 """
 
 import fcntl
@@ -307,7 +307,7 @@ class Budget:
                 task = row["task_id"]
                 if not isinstance(task, str) or not re.fullmatch(r"[0-9a-f]{64}", task):
                     raise GateDenied("ledger_task")
-                entry_id = row["entry_id"]
+                entry_id = row.get("entry_id")
                 if not isinstance(entry_id, str) or not entry_id:
                     raise GateDenied("ledger_entry")
                 if kind == "reserve":
@@ -354,7 +354,7 @@ class Budget:
                     if not isinstance(reason_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", reason_hash):
                         raise GateDenied("ledger_release")
                     stopped.remove(task)
-                    first = {key: value for key, value in first.items() if key[1] != task}
+                    first.pop((entry_id, task), None)
                 else:
                     raise GateDenied("ledger_kind")
         except (KeyError, ValueError, TypeError, RecursionError):
@@ -382,7 +382,8 @@ class Budget:
         os.fsync(stream.fileno())
         return row
 
-    def reserve(self, entry, calls, max_in_tokens, max_out_tokens, task_id) -> dict:
+    def _reserve(self, entry, calls, max_in_tokens, max_out_tokens, task_id) -> dict:
+        """Internal: gate() supplies the checked roster entry, including caps."""
         task = _task(task_id)
         _integer(calls, minimum=1)
         _integer(max_in_tokens)
@@ -503,6 +504,11 @@ class Budget:
     def stop(self, epoch=None):
         """Stop through a known epoch, or all existing reservations if omitted.
         With an empty ledger, stop() records an epoch-zero no-op.
+
+        If no reply will arrive, a human can close an outstanding reservation:
+        stop(), then settle(task, None, None, epoch). This records the reserved
+        estimates as a late settlement; it does not refund unknown usage.
+        If the task is stopped, release(task, reason) is a separate human step.
         """
         with self._locked() as stream:
             reservations, _, _, _, _, cutoff, latest, last_at = self._read(stream)
@@ -526,13 +532,14 @@ def gate(roster_path, entry_id, hops, parts, max_chars, budget, calls,
     items = _parts(parts)
     check_send(roster, entry_id, items, max_chars)
     if detector is not None:
-        try:
-            # Check parts and their actual concatenation to catch split patterns.
-            for text in [part[0] for part in items] + ["".join(part[0] for part in items)]:
-                if detector(text) is not False:
-                    raise GateDenied("detector_denied")
-        except Exception:
-            raise GateDenied("detector_failed_or_denied") from None
+        # Check parts and their actual concatenation to catch split patterns.
+        for text in [part[0] for part in items] + ["".join(part[0] for part in items)]:
+            try:
+                denied = detector(text)
+            except Exception:
+                raise GateDenied("detector_error") from None
+            if denied is not False:
+                raise GateDenied("detector_denied")
     if type(budget) is not Budget:
         raise GateDenied("invalid_budget")
-    return budget.reserve(entry, calls, max_in_tokens, max_out_tokens, task_id)
+    return budget._reserve(entry, calls, max_in_tokens, max_out_tokens, task_id)
