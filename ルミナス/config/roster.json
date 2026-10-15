@@ -1,7 +1,9 @@
 {
   "schema": "luminous-roster/v0",
   "updated": "2026-10-15",
-  "approved_by": null,
+  "approved_by": "Mark",
+  "approved_at": "2026-10-15",
+  "approval_record": "state/decisions/20261015-baseline-approvals.md",
   "note": "名簿 v0（P2）。役割→提供元・モデル・版の対応。項目の説明は docs/baseline/roster-schema.md。approved_by が null の間は案（Mark の承認前）。単価の単位は USD／100 万トークン。null は不明（不明の相手は予約できない＝ゲートが止める）",
   "entries": [
     {

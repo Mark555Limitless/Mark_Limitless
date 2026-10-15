@@ -36,6 +36,7 @@
       "Edit(/tools/**)",
       "Edit(/.env.example)",
       "Edit(/docs/review.md)",
+      "Edit(/config/roster.json)",
       "Edit(/.gitattributes)"
     ],
     "deny": [
