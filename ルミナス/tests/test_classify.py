@@ -39,7 +39,7 @@ def test_config_redaction(monkeypatch):
     '初めて訪れる方にも会場の住所と駅からの道順が分かるように案内文を作成してください。',
     '来月の予定について参加者全員が無理なく集まれる日程を相談する文章を考えてください。',
     '記事 https://www.example.com/news/2026/10/16/internationalization-and-localization-guidelines を紹介',
-    'abcdef0123456789' * 2 + 'abcdef01',
+    'commit ' + 'abcdef0123456789' * 2 + 'abcdef01',
     'internationalization-and-localization-guidelines',
     '20261016', '12345678901円', 'ISBN 9784123456789', 'INV-0012-3456',
     '2026/10/01-2026/10/31', '期間2026/10/01-2026/10/31', 'react@18.3.1', '.envrc', '.environment',
@@ -142,3 +142,64 @@ def test_token_assignment_boundaries(name, prefix):
 ])
 def test_password_shape_boundary(text, expected):
     assert ('password_shape' in classify(text, 'public')[1]) is expected
+
+
+# Synthetic values are assembled here, never real credentials.
+_HEX_VALUE = 'abcdef0123456789' * 2 + 'abcdef01'
+_RANDOM_VALUE = '0123456789abcdefghijklmnopqrstuvwx'
+
+
+@pytest.mark.parametrize('prefix,suffix,reason', [
+    ('', '', 'key_shape'), ('token=', '', 'key_shape'),
+    ('文の途中', 'です', 'key_shape'),
+    ('https://x.test/', '', 'key_shape'),
+    ('https://x.test/a/', '', 'entropy'),
+    ('https://x.test/dl?f=', '', 'entropy'),
+    ('https://x.test/?f=/commit/', '', 'key_shape'),
+    ('https://x.test/#/commit/', '', 'key_shape'),
+    ('/commit/', '', 'key_shape'), ('notcommit ', '', 'key_shape'),
+])
+def test_bypass_rejected(prefix, suffix, reason):
+    value = _RANDOM_VALUE if reason == 'entropy' else _HEX_VALUE
+    text = prefix + value + suffix
+    for origin in ('public', 'private', None):
+        label, reasons = classify(text, origin)
+        assert label == 'C' and reason in reasons
+    assert value not in redact_for_log(text)
+
+
+@pytest.mark.parametrize('prefix,suffix', [
+    ('commit ', ''), ('sha: ', ''), ('SHA1:  ', ''),
+    ('REV ', ''), ('hash ', ''), ('ref ', ''),
+    ('https://github.com/o/r/commit/', ''),
+    ('https://github.com/o/r/commits/', ''),
+    ('https://github.com/o/r/tree/', ''),
+    ('https://github.com/o/r/blob/', '/README.md'),
+    ('https://github.com/o/r/compare/', ''),
+])
+def test_explicit_commit_context(prefix, suffix):
+    text = prefix + _HEX_VALUE + suffix
+    assert classify(text, 'public') == ('A', [])
+    assert redact_for_log(text) == text
+
+
+@pytest.mark.parametrize('text', [
+    'https://www.example.com/news/2026/10/16/internationalization-and-localization-guidelines',
+    'https://example.test/?page=2&sort=asc',
+    'https://' + _RANDOM_VALUE + '.test/',
+    'https://x.test/abcdefghijklmnop/qrstuvwxyz012345',
+    'https://x.test/?f=abcdefghijklmnop&g=qrstuvwxyz012345',
+])
+def test_url_components_public(text):
+    assert classify(text, 'public') == ('A', [])
+
+
+def test_bare_hex_redaction():
+    assert redact_for_log(_HEX_VALUE) == '[C]'
+    assert redact_for_log('commit ' + _HEX_VALUE) == 'commit ' + _HEX_VALUE
+
+
+@pytest.mark.parametrize('value', ['a' * 40, '1' * 40, _HEX_VALUE.upper()])
+def test_hex_key_without_mixed_characters(value):
+    assert 'key_shape' in classify(value, 'public')[1]
+    assert redact_for_log(value) == '[C]'

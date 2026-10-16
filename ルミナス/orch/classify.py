@@ -7,11 +7,11 @@ from typing import List, Optional, Tuple
 
 from . import config
 
-# A bare SHA-1 is a commit ID; explicit secret prefixes/assignments still win.
-_GENERIC_KEY = (r"(?<![A-Za-z0-9_-])(?![0-9a-fA-F]{40}(?![A-Za-z0-9_-]))"
+_HEX40 = r"(?<![A-Za-z0-9_-])[0-9a-fA-F]{40}(?![A-Za-z0-9_-])"
+_GENERIC_KEY = (r"(?<![A-Za-z0-9_-])"
                 r"(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*[0-9])"
                 r"[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-])")
-_KEY = re.compile(config._GENERIC_SECRET.pattern + r"|" + _GENERIC_KEY
+_KEY = re.compile(config._GENERIC_SECRET.pattern + r"|" + _GENERIC_KEY + r"|" + _HEX40
                   + r"|-----BEGIN[^\r\n]*|xox[abp]-[A-Za-z0-9-]*|ghp_[A-Za-z0-9_]*"
                   r"|AKIA[0-9A-Z]{16}|(?i:key|token|sig|signature|secret|password|pass|pwd|auth|access_token|api_key)="
                   r"[A-Za-z0-9+/=_.\-%]{16,}")
@@ -61,6 +61,44 @@ def _number_reason(value):
 _PRIVATE = re.compile(r"(?<![\w.])\.env(?:\.[\w.-]+)?(?![\w])|settings\.local\.json|_\u975e\u516c\u958b|/\u0055sers/|/home/|C:\\Users\\", re.I)
 _SECRET_NAME = re.compile(r"\b(?:" + "|".join(map(re.escape, config.SECRET_ENV_NAMES)) + r")\s*[=:]", re.I)
 _URL = re.compile(r"https?://[^\s<>\u3000-\uffff]+", re.I)
+_URL_HEAD = re.compile(r"https?://[^/?#\s]+", re.I)
+_COMMIT_WORD = re.compile(r"\b(?:commit|sha1?|rev|hash|ref)\s*:?\s*$", re.I)
+_GIT_PATH = re.compile(r"/(?:commit|commits|tree|blob|compare)/$")
+
+
+def _inspection_text(text, entropy=False):
+    """Keep offsets while separating URL components; never decode percent escapes."""
+    def replace(match):
+        value = match.group()
+        head = _URL_HEAD.match(value)
+        size = head.end() if head else 0
+        separators = r"[/?&#=]" if entropy else r"[/?&#]"
+        return ' ' * size + re.sub(separators, " ", value[size:])
+    return _URL.sub(replace, text)
+
+
+def _is_commit(text, match):
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", match.group()):
+        return False
+    for url in _URL.finditer(text):
+        if url.start() <= match.start() < url.end():
+            head = _URL_HEAD.match(url.group())
+            if not head:
+                return False
+            prefix = text[url.start() + head.end():match.start()]
+            return '?' not in prefix and '#' not in prefix and bool(_GIT_PATH.search(prefix))
+    return bool(_COMMIT_WORD.search(text[:match.start()]))
+
+
+def _key_matches(text):
+    return (match for match in _KEY.finditer(_inspection_text(text))
+            if not _is_commit(text, match))
+
+
+def _password_text(text):
+    # Only recognized commit IDs are exempt; retain the existing password rule.
+    return re.sub(_HEX40, lambda m: ' ' * len(m.group()) if _is_commit(text, m)
+                  else m.group(), text)
 
 
 def _normalize(text):
@@ -73,7 +111,10 @@ def classify(text: str, origin: Optional[str] = None) -> Tuple[str, List[str]]:
     if not isinstance(text, str):
         return "C", reasons + ["invalid_text"]
     normalized = _normalize(text)
-    for pattern, reason in ((_KEY, "key_shape"), (_EMAIL, "email"),
+    if any(_key_matches(normalized)):
+        reasons.append("key_shape")
+        label = "C"
+    for pattern, reason in ((_EMAIL, "email"),
                             (_PRIVATE, "private_path"),
                             (_SECRET_NAME, "secret_name")):
         if pattern.search(normalized):
@@ -82,7 +123,8 @@ def classify(text: str, origin: Optional[str] = None) -> Tuple[str, List[str]]:
     if any(_is_phone(match) for match in _PHONE.finditer(normalized)):
         reasons.append("phone")
         label = "C"
-    if any(_is_password(match.group()) for match in _MIXED_ASCII.finditer(normalized)):
+    if any(_is_password(match.group()) for match in
+           _MIXED_ASCII.finditer(_password_text(normalized))):
         reasons.append("password_shape")
         label = "C"
     for match in _NUMBERS.finditer(normalized):
@@ -90,7 +132,8 @@ def classify(text: str, origin: Optional[str] = None) -> Tuple[str, List[str]]:
         if reason and reason not in reasons:
             reasons.append(reason)
             label = "C"
-    for token in re.findall(r"[A-Za-z0-9+/=_.\-]{24,}", _URL.sub(" ", normalized)):
+    for token in re.findall(r"[A-Za-z0-9+/=_.\-]{24,}",
+                            _inspection_text(normalized, entropy=True)):
         counts = Counter(token)
         entropy = -sum((n / len(token)) * math.log2(n / len(token)) for n in counts.values())
         if entropy > 4.5:
@@ -102,8 +145,11 @@ def classify(text: str, origin: Optional[str] = None) -> Tuple[str, List[str]]:
 
 def redact_for_log(text: str) -> str:
     out = config.redact(_normalize(text))
-    for pattern in (_EMAIL, _KEY):
-        out = pattern.sub("[C]", out)
-    out = _MIXED_ASCII.sub(lambda m: "[C]" if _is_password(m.group()) else m.group(), out)
+    for match in reversed(list(_key_matches(out))):
+        out = out[:match.start()] + "[C]" + out[match.end():]
+    out = _EMAIL.sub("[C]", out)
+    for match in reversed(list(_MIXED_ASCII.finditer(_password_text(out)))):
+        if _is_password(match.group()):
+            out = out[:match.start()] + "[C]" + out[match.end():]
     out = _NUMBERS.sub(lambda m: "[C]" if _number_reason(m.group()) else m.group(), out)
     return _PHONE.sub(lambda match: "[C]" if _is_phone(match) else match.group(), out)
