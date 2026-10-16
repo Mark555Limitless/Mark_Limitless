@@ -80,6 +80,9 @@ def route(prompt: str, *, role: str, origin: Optional[str] = None,
         return finish(len(prompt))
     for entry in entries[:min(max_tries, 2)]:
         if config.global_halt():
+            result.rc, result.reason = config.HALT_EXIT_CODE, "global_halt"
+            result.reasons.append("global_halt")
+            finish(len(prompt))
             raise config.GlobalHalt()
         adapter = {"google": gemini, "sakana": fugu}.get(entry.get("provider"))
         if adapter is None:

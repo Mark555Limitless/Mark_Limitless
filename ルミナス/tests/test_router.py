@@ -179,3 +179,28 @@ def test_cli_invalid_utf8(routing, monkeypatch, capsys):
     out = capsys.readouterr()
     assert out.out == '' and out.err == 'router: invalid_input\n'
     call.assert_not_called()
+
+
+@pytest.mark.parametrize('halt_checks,attempts', [([False, False, True], 1), ([False, True], 0)])
+def test_loop_halt_records_completed_attempts(routing, monkeypatch, isolated_env, halt_checks, attempts):
+    monkeypatch.setattr(config, 'global_halt', Mock(side_effect=halt_checks))
+    first = Mock(return_value=gemini.Result(2, 'API障害'))
+    second = Mock(side_effect=AssertionError('must not fall back'))
+    monkeypatch.setattr(gemini, 'generate', first)
+    monkeypatch.setattr(fugu, 'generate', second)
+    with pytest.raises(config.GlobalHalt):
+        router.route('本文を保存しない', role='drafter', origin='public')
+    raw = (isolated_env / 'data/router_log.jsonl').read_text()
+    rows = [json.loads(line) for line in raw.splitlines()]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row['final_rc'] == config.HALT_EXIT_CODE
+    assert row['reasons'] == ['global_halt']
+    assert len(row['tries']) == attempts
+    assert first.call_count == attempts
+    if attempts:
+        assert row['tries'][0]['entry_id'] == 'first'
+        assert row['tries'][0]['rc'] == 2
+        assert row['tries'][0]['reason'] == 'API障害'
+    assert '本文を保存しない' not in raw
+    second.assert_not_called()

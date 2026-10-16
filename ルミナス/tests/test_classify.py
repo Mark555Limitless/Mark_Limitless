@@ -69,3 +69,76 @@ def test_sensitive_regressions(text, reason):
 def test_url_exclusion_preserves_following_entropy():
     text = 'https://example.test/ 記事を紹介。' + '0123456789abcdefghijklmnopqrstuv'
     assert 'entropy' in classify(text, 'public')[1]
+
+
+@pytest.mark.parametrize('text,reason', [
+    ('x@163.com', 'email'), ('foo@1und1.de', 'email'),
+    ('p@ssW0rd!' + 'Xy7#Lm2$' + 'Qr9&Tz4*Kw8', 'password_shape'),
+    ('4111111111111111', 'card_number'),
+    ('4111 1111 1111 1111', 'card_number'),
+    ('5500-0000-0000-0004', 'card_number'),
+    ('https://example.test/?sig=' + 'aB3dE5fG7hJ9kL1mN3pQ5rSx', 'key_shape'),
+    ('https://example.test/?token=' + 'a' * 16, 'key_shape'),
+    ('090‐1234‐5678', 'phone'), ('090ー1234ー5678', 'phone'),
+    ('(03)1234-5678', 'phone'), ('03(1234)5678', 'phone'),
+    ('+81 (0)90 1234 5678', 'phone'), ('+1 (555) 123-4567', 'phone'),
+])
+def test_restored_sensitive_cases(text, reason):
+    for origin in ('public', 'private', None):
+        label, reasons = classify(text, origin)
+        assert label == 'C' and reason in reasons
+    assert text not in redact_for_log(text)
+
+
+@pytest.mark.parametrize('text', [
+    'react@18.3.1', 'pkg@1.2.3-beta',
+    'print(f"{user.name}:{user.id}")', 'os.path.join(a,b)', 'x=1;y=2',
+    '4111111111111112', '期限 08 2026', '05 10 2026', '〒060-0001',
+    'INV 0012-3456', '注文番号 000123', 'commit 3f0912345a',
+    'Please write a clear introduction for everyone attending the meeting.',
+    'The value is 0.5 and version 1.2.3', 'prod.env', '.env_backup',
+])
+def test_restored_public_cases(text):
+    assert classify(text, 'public') == ('A', [])
+    assert redact_for_log(text) == text
+
+
+def personal_check_digit(body):
+    weights = (6, 5, 4, 3, 2, 7, 6, 5, 4, 3, 2)
+    remainder = sum(int(d) * w for d, w in zip(body, weights)) % 11
+    return str(0 if remainder <= 1 else 11 - remainder)
+
+
+@pytest.mark.parametrize('body', ['12345678901', '11111111111', '10000000008'])
+@pytest.mark.parametrize('separator', ['', ' ', '-'])
+def test_personal_number_checksum(body, separator):
+    number = body + personal_check_digit(body)
+    text = separator.join(number[i:i + 4] for i in range(0, 12, 4))
+    assert 'personal_number' in classify(text, 'public')[1]
+    assert redact_for_log(text) == '[C]'
+
+
+def test_invalid_personal_number():
+    number = '123456789013'
+    assert number[-1] != personal_check_digit(number[:-1])
+    assert classify(number, 'public') == ('A', [])
+
+
+@pytest.mark.parametrize('name', [
+    'key', 'token', 'sig', 'signature', 'secret', 'password', 'pass', 'pwd',
+    'auth', 'access_token', 'api_key',
+])
+@pytest.mark.parametrize('prefix', ['', 'https://example.test/?'])
+def test_token_assignment_boundaries(name, prefix):
+    text = prefix + name.upper() + '='
+    assert 'key_shape' in classify(text + 'x' * 16, 'public')[1]
+    assert 'key_shape' not in classify(text + 'x' * 15, 'public')[1]
+
+
+@pytest.mark.parametrize('text,expected', [
+    ('aA1!' + 'a' * 12, True), ('aA1!' + 'a' * 11, False),
+    ('aa1!' + 'a' * 12, False), ('AA1!' + 'A' * 12, False),
+    ('aAa!' + 'a' * 12, False), ('aA1a' + 'a' * 12, False),
+])
+def test_password_shape_boundary(text, expected):
+    assert ('password_shape' in classify(text, 'public')[1]) is expected
