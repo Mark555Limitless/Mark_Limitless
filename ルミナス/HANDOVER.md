@@ -3,14 +3,21 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-16 未明 第 4 往復の合意の実装（司令塔: Claude Fable 5.1）
+- 状態: Codex は利用枠の上限（rc=4・差分なし）。CLAUDE.md の例外により**司令塔が直接実装**（指示書 `docs/specs/20261016_cost_unknown_model_id.md`。指示書の範囲外の `tests/conftest.py` を 1 行〔FLAG_VARS に ORCH_GEMINI_RECONCILED・ORCH_FUGU_RECONCILED〕）。Opus 審査 APPROVE。pytest 835 passed・5 skipped、hooks 247 passed
+- 実装: 使用量が読めない応答・タイムアウト・通信例外・5xx の計上を Gemini でも `max($0.05, 見込み額)` に（上限の判定も「実額＋見込み額」）。応答の実行時モデル ID（Gemini `modelVersion`・Fugu `model`）を記録し、名簿の alias と版の表記だけ違う場合を除いて不一致なら rc=2 `served_model_mismatch`（本文を使わない・費用は実額・再試行しない）。同じベンダーで実費不明の失敗が当日 2 回なら `要照合` で停止（`ORCH_<VENDOR>_RECONCILED=1` で解除）。台帳の行に `served`・`unknown`
+- 審査の軽い指摘は gate_followups の 10 に追加（Gemini の入口の型検査・台帳読み失敗・負のトークン数）
+- 振り分け役 v0 の 1 週目の指示書 `docs/specs/20261016_router_v0_week1.md` を作成（Codex の枠が戻ってから。戻らなければ司令塔が直接）
+- 次の一手: 振り分け役 v0 の 1 週目
+
 ## 2026-10-16 深夜 第 4 往復（この Codex スレッド）と難しめのコーディングの実測（司令塔: Claude Fable 5.1。Mark が /model で指定）
-- 状態: 作業ツリーに未コミットの変更あり（Mark がコミットの実行を止めた）: `docs/brainstorm/20261014-luna-wallbounce.md`（第 4 往復）・`docs/proposals/20261015-prototype-baseline.md`（§2.1 M0/M1）・`docs/specs/20261016_cost_unknown_model_id.md`（新規）・`state/escalations.log`・`☆ルミナス_最終プロンプト.docx`（SessionEnd の再生成）・本日の記録 3 つ。**次のセッションは、Mark にコミットしてよいか確かめてから進める**
+- 状態: Mark の指示「コミットして。」でコミット済み: `docs/brainstorm/20261014-luna-wallbounce.md`（第 4 往復）・`docs/proposals/20261015-prototype-baseline.md`（§2.1 M0/M1）・`docs/specs/20261016_cost_unknown_model_id.md`（新規）・`state/escalations.log`・`☆ルミナス_最終プロンプト.docx`（SessionEnd の再生成）・本日の記録 3 つ
 - Mark の指示（原文）: 「「確かめてから返す」を v0 に加えて、正解率を上げるのは賛成だけれど、それによって回答までの時間が極端に長くなるとユーザーにはむしろマイナス評価になり得ます。確かめるためにどの程度の追加時間がかかるかも考慮に入れてください。もっと難しいコーディング（複数ファイル・バグ修正など）でも Fugu を測ってみてください。」
 - 実測（非公開 `data/bench/20261015/README.md`）: 難しめ 4 問で Fugu・Gemini とも 4/4。検証（隠した試験をサンドボックスで実行）の追加時間は 1 問 0.1〜0.4 秒で、生成の 1〜2%。再生成が要るときだけ生成 1 回分が足される。採点器の不具合（文字列の中の語を禁止語と誤認）を直した
 - 第 4 往復の決定: A 費用不明の計上は見込み額以上（Fugu は実装済み・Gemini はこれから）、同じ行で実費不明が 1 日 2 回なら照合まで停止、単価の無い行はゲートが拒否／B 完成を M0（オフライン）と M1（限定の実接続）に分ける。現状 ①⑤⑥は M0 で達成、M1 のうち上限の承認とゲートの実経路は済み、影運用 1 回は未／C alias は週次で確認し、実行時のモデル ID を記録して名簿と食い違えば保留。相手の記録名は「この Codex スレッド」（モデル名は未検証）
 - 提案（振り分け役 v0 への追加）: 検証は常に行い、再生成は 1 回まで。再生成の見込み時間が利用者の待ち上限を超えるなら最初の答えを「未確認」の印つきで返す
-- 未解決: コミットの確認（Mark）／指示書 `20261016_cost_unknown_model_id.md` の実行（Codex の枠が戻ってから。Fable5・脳でんちを優先）／Fugu の実請求との照合（Mark）／縮退運転の予備モデル／Genspark
-- 次の一手: コミット → 指示書 → 振り分け役 v0 の 1 週目（区分 C の強制引き上げと停止、「確かめてから返す」）
+- 未解決: 指示書 `20261016_cost_unknown_model_id.md` の実行（Codex の枠が戻ってから。Fable5・脳でんちを優先）／Fugu の実請求との照合（Mark）／縮退運転の予備モデル／Genspark
+- 次の一手: 指示書 → 振り分け役 v0 の 1 週目（区分 C の強制引き上げと停止、「確かめてから返す」）
 
 ## 2026-10-15 夜 [伝] の再指示（司令塔: Claude Opus 5.5）
 - Mark の指示（原文）: 「[1] 今後は過程の説明は不要。ボクに伝える必要がある部分だけ詳しく伝えて。これを恒久ルールとして、CLAUDE.md、digest、Obsidian、☆ルミナス_最終プロンプト.docxなどの必要なファイルに書き込んでください。hooksも活用してください。」
