@@ -26,7 +26,7 @@ def _matches_role(entry, role) -> bool:
     """role_key（機械用の英小文字のキー）があればそれで、無ければ従来の日本語の role で照合する（後方互換）。"""
     key = entry.get("role_key")
     if isinstance(key, str) and key:
-        return key == role or entry["role"] == role
+        return key == role
     return entry["role"] == role
 
 
@@ -78,7 +78,7 @@ def plan_switch(roster, role, new_id) -> dict:
     plan = deepcopy(roster)
     old = active(plan, role)
     new = next((entry for entry in _entries(plan) if entry["id"] == new_id), None)
-    if (new is None or new is old or new["role"] != role
+    if (new is None or new is old or not _matches_role(new, role)
             or new.get("state") != "trial"):
         raise ValueError("invalid_switch")
     history = plan.setdefault("switch_history", [])
@@ -102,7 +102,7 @@ def plan_rollback(roster, role) -> dict:
     last = history[index]
     previous = next((entry for entry in _entries(plan) if entry["id"] == last.get("from")), None)
     if (last.get("to") != current["id"] or previous is None
-            or previous["role"] != role or previous.get("state") != "hold"
+            or not _matches_role(previous, role) or previous.get("state") != "hold"
             or current.get("state") != "adopted"):
         raise ValueError("rollback_unavailable")
     current["state"], previous["state"] = "trial", "adopted"

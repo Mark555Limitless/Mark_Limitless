@@ -48,6 +48,8 @@ class Result:
     usage: Dict[str, Any] = field(default_factory=dict)
     served: str = ""      # 応答の modelVersion（実行時のモデル ID。無ければ空）
     unknown: bool = False  # 実費が分からず、見込み額以上の控えめな額を計上した
+    sec: float = 0.0
+    usd: float = 0.0
 
 
 def _roster(entry_id: Optional[str] = None):
@@ -231,7 +233,8 @@ def generate(
     t0 = time.monotonic()
 
     def finish(res: Result, usd: float = 0.0, *, skipped: bool = False) -> Result:
-        _log(m, res, time.monotonic() - t0, usd, purpose, skipped=skipped)
+        res.sec, res.usd = time.monotonic() - t0, usd
+        _log(m, res, res.sec, usd, purpose, skipped=skipped)
         return res
 
     if config.global_halt():   # 全体停止は失敗ではなく本流も止める（docs/specs/20261008_global_halt.md）

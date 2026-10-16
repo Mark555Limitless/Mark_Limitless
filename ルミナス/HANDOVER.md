@@ -3,6 +3,13 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-17 未明 振り分け役 v0 の 1 週目（実装済み・審査待ち）（司令塔: Claude Fable 5.1）
+- 状態: 未コミット＝`orch/classify.py`・`orch/router.py`・`tests/test_classify.py`・`tests/test_router.py`（新規）、`orch/roster.py`・`orch/gemini.py`（Result に sec・usd）・`tests/test_roster.py`、指示書 `docs/specs/20261016_stops_in_gate.md`。試験 880 passed・hooks 247 passed。Opus の審査を再開中（月の支出上限で一度止まった）
+- Mark の指示: この窓で続ける。Codex の指摘（壁打ちの往復中に実装を始めた）→ ADR `state/decisions/20261016-consult-vs-implement.md`（往復中は回答と記録だけ・2 つの窓で動かさない）
+- 直したこと: 別の窓が閉じられた際に `orch/gemini.py`・`tests/conftest.py`・gate_followups 指示書が古い中身で上書きされていた（第 4 往復の合意の実装を消す内容）→ HEAD の内容に戻した。私の重複コミット `977d058` は `8eaa1ce` で取り消し
+- 未解決: 審査 → コミット／`stops_in_gate`（直接呼び出しとゲートで停止条件を効かせる。セキュリティ審査の指摘）／名簿に `role_key`・`jurisdiction` を足す（Codex の案: commander・researcher・verifier・implementer・sparring・drafter・signal・measure。法域は US が多いが契約主体の確認が要る＝Mark）／ROUTINE §2 に「壁打ちと実装を分ける」を追記（Mark の確認つき）
+- 次の一手: 審査 APPROVE → 該当ファイルだけコミット → stops_in_gate を Codex → 名簿の追記を Mark に確認
+
 ## 2026-10-16 未明 第 4 往復の合意の実装（司令塔: Claude Fable 5.1）
 - 状態: Codex は利用枠の上限（rc=4・差分なし）。CLAUDE.md の例外により**司令塔が直接実装**（指示書 `docs/specs/20261016_cost_unknown_model_id.md`。指示書の範囲外の `tests/conftest.py` を 1 行〔FLAG_VARS に ORCH_GEMINI_RECONCILED・ORCH_FUGU_RECONCILED〕）。Opus 審査 APPROVE。pytest 835 passed・5 skipped、hooks 247 passed
 - 実装: 使用量が読めない応答・タイムアウト・通信例外・5xx の計上を Gemini でも `max($0.05, 見込み額)` に（上限の判定も「実額＋見込み額」）。応答の実行時モデル ID（Gemini `modelVersion`・Fugu `model`）を記録し、名簿の alias と版の表記だけ違う場合を除いて不一致なら rc=2 `served_model_mismatch`（本文を使わない・費用は実額・再試行しない）。同じベンダーで実費不明の失敗が当日 2 回なら `要照合` で停止（`ORCH_<VENDOR>_RECONCILED=1` で解除）。台帳の行に `served`・`unknown`

@@ -97,3 +97,34 @@ def test_ambiguous_active_is_refused():
     data["entries"][1]["state"] = "adopted"
     with pytest.raises(ValueError, match="ambiguous"):
         roster.active(data, "draft")
+
+
+def test_role_key_precedes_legacy_role():
+    data = pair()
+    data['entries'][0]['role_key'] = 'drafter'
+    assert roster.active(data, 'drafter')['id'] == 'A'
+    assert roster.active(data, 'draft')['id'] == 'B'
+
+
+def test_candidate_order_and_stop_reasons():
+    data = {'entries': [
+        dict(id='trial', role='draft', state='trial'),
+        dict(id='first', role='draft', state='adopted'),
+        dict(id='second', role='draft', state='adopted'),
+        dict(id='stop', role='draft', state='trial', stopped=True),
+        dict(id='country', role='draft', state='trial', jurisdiction='CN'),
+        dict(id='vendor', role='draft', state='trial', provider='xxx'),
+    ], 'stops': {'jurisdictions': ['CN'], 'providers': ['xxx']}}
+    candidates, skips = roster.candidates_with_skips(data, 'draft')
+    assert [e['id'] for e in candidates] == ['first', 'second', 'trial']
+    assert [e['why'] for e in skips] == ['stopped', 'jurisdiction_stopped', 'provider_stopped']
+    assert roster.candidates(data, 'draft') == candidates
+
+
+def test_switch_rollback_with_role_key():
+    data = pair()
+    for entry in data['entries']:
+        entry['role_key'] = 'drafter'
+    switched = roster.plan_switch(data, 'drafter', 'B')
+    assert roster.active(switched, 'drafter')['id'] == 'B'
+    assert roster.active(roster.plan_rollback(switched, 'drafter'), 'drafter')['id'] == 'A'
