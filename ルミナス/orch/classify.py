@@ -16,14 +16,14 @@ _KEY = re.compile(config._GENERIC_SECRET.pattern + r"|" + _GENERIC_KEY + r"|" + 
                   r"|AKIA[0-9A-Z]{16}|(?i:key|token|sig|signature|secret|password|pass|pwd|auth|access_token|api_key)="
                   r"[A-Za-z0-9+/=_.\-%]{16,}")
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*"
-                    r"\.[A-Za-z]{2,}(?![A-Za-z0-9-])")
+                    r"\.[A-Za-z]{2,}")
 _MIXED_ASCII = re.compile(r"[!-~]{16,}")  # 名前に password を含めない（秘密の検査器が代入文と誤認するため）
 # Consume dates and identifiers whole; TEL is an explicit phone prefix.
 _PHONE = re.compile(r"(?P<non_phone>(?<!\d)\d{4}/\d{1,2}/\d{1,2}"
                     r"|(?<![A-Za-z0-9_-])[0-9a-fA-F]{40}(?![A-Za-z0-9_-])"
                     r"|[A-Za-z][A-Za-z_]*-\d{4}-\d{4}(?![\d-]))"
-                    r"|(?P<phone>(?:(?<![A-Za-z0-9])|(?<=TEL))"
-                    r"(?:\+[0-9]|\(0|0)[0-9 ()\t.\-]*[0-9](?![A-Za-z0-9]))")
+                    r"|(?P<phone>(?:(?<![A-Za-z0-9])|(?<=(?i:TEL)))"
+                    r"(?:\+[0-9]|\(0|[0-9])[0-9 ()\t.\-]*[0-9](?![A-Za-z0-9]))")
 _NUMBERS = re.compile(r"(?<![A-Za-z0-9])[0-9]+(?:[ \t-]+[0-9]+)*(?![A-Za-z0-9])")
 
 
@@ -31,8 +31,15 @@ def _is_phone(match):
     value = match.group("phone")
     if not value:
         return False
-    count = sum(c.isdigit() for c in value)
-    return 10 <= count <= (15 if value.startswith("+") else 11)
+    # Every valid start with ten remaining digits has a valid ten-digit window.
+    # A reverse scan avoids repeatedly scanning long runs of separators/digits.
+    count = 0
+    for char in reversed(value):
+        if char.isdigit():
+            count += 1
+        if char in "0+" and count >= 10:
+            return True
+    return False
 
 
 def _is_password(value):
@@ -41,7 +48,39 @@ def _is_password(value):
 
 
 def _number_reason(value):
-    digits = re.sub(r"[ \t-]", "", value)
+    # Bound checksum work by the first 60 digits, preserving group boundaries.
+    groups = []
+    remaining = 60
+    for match in re.finditer(r"[0-9]+", value):
+        group = match.group()[:remaining]
+        groups.append(group)
+        remaining -= len(group)
+        if not remaining:
+            break
+    personal = None
+    for start in range(len(groups)):
+        digits = ""
+        for group in groups[start:]:
+            digits += group
+            if len(digits) > 19:
+                break
+            reason = _checksum_reason(digits)
+            if reason == "card_number":
+                return reason
+            if reason:
+                personal = reason
+    for group in groups:
+        for start in range(len(group)):
+            for size in range(12, min(19, len(group) - start) + 1):
+                reason = _checksum_reason(group[start:start + size])
+                if reason == "card_number":
+                    return reason
+                if reason:
+                    personal = reason
+    return personal
+
+
+def _checksum_reason(digits):
     if 13 <= len(digits) <= 19:
         total = 0
         for index, digit in enumerate(reversed(digits)):
@@ -49,7 +88,7 @@ def _number_reason(value):
             total += n - 9 if n > 9 else n
         if total % 10 == 0:
             return "card_number"
-    if re.fullmatch(r"[0-9]{12}|[0-9]{4}[ \t-][0-9]{4}[ \t-][0-9]{4}", value):
+    if len(digits) == 12:
         total = sum(int(digit) * (n + 1 if n <= 6 else n - 5)
                     for n, digit in enumerate(reversed(digits[:-1]), 1))
         q = 11 - total % 11
@@ -61,7 +100,9 @@ def _number_reason(value):
 _PRIVATE = re.compile(r"(?<![\w.])\.env(?:\.[\w.-]+)?(?![\w])|settings\.local\.json|_\u975e\u516c\u958b|/\u0055sers/|/home/|C:\\Users\\", re.I)
 _SECRET_NAME = re.compile(r"\b(?:" + "|".join(map(re.escape, config.SECRET_ENV_NAMES)) + r")\s*[=:]", re.I)
 _URL = re.compile(r"https?://[^\s<>\u3000-\uffff]+", re.I)
-_URL_HEAD = re.compile(r"https?://[^/?#\s]+", re.I)
+# URL のうち検査から外すのはスキームとホストだけ。ユーザー情報（user:token@）があるときはスキームだけ外し、ユーザー情報は検査に残す
+# （自動のセキュリティ審査の指摘 2026-10-17: `https://user:鍵@host/` の鍵が抜けていた）
+_URL_HEAD = re.compile(r"https?://(?=[^/?#\s]*@)|https?://[^/?#\s@]+", re.I)
 _COMMIT_WORD = re.compile(r"\b(?:commit|sha1?|rev|hash|ref)\s*:?\s*$", re.I)
 _GIT_PATH = re.compile(r"/(?:commit|commits|tree|blob|compare)/$")
 
@@ -91,8 +132,9 @@ def _is_commit(text, match):
 
 
 def _key_matches(text):
-    return (match for match in _KEY.finditer(_inspection_text(text))
-            if not _is_commit(text, match))
+    """鍵の形を探す。URL はスキームとホストだけ外し、ユーザー情報・パス・クエリは検査に残す（位置は元の文と同じ）。"""
+    return [match for match in _KEY.finditer(_inspection_text(text))
+            if not _is_commit(text, match)]
 
 
 def _password_text(text):

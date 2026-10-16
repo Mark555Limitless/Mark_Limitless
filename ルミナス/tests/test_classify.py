@@ -1,3 +1,5 @@
+from time import perf_counter
+
 import pytest
 from orch.classify import classify, redact_for_log
 
@@ -93,7 +95,8 @@ def test_restored_sensitive_cases(text, reason):
 @pytest.mark.parametrize('text', [
     'react@18.3.1', 'pkg@1.2.3-beta',
     'print(f"{user.name}:{user.id}")', 'os.path.join(a,b)', 'x=1;y=2',
-    '4111111111111112', '期限 08 2026', '05 10 2026', '〒060-0001',
+    # 4111111111111112 は Luhn に通る部分番号を含むので、窓の判定では C（安全側。2026-10-17 に A から変更）
+    '期限 08 2026', '05 10 2026', '〒060-0001',
     'INV 0012-3456', '注文番号 000123', 'commit 3f0912345a',
     'Please write a clear introduction for everyone attending the meeting.',
     'The value is 0.5 and version 1.2.3', 'prod.env', '.env_backup',
@@ -203,3 +206,93 @@ def test_bare_hex_redaction():
 def test_hex_key_without_mixed_characters(value):
     assert 'key_shape' in classify(value, 'public')[1]
     assert redact_for_log(value) == '[C]'
+
+
+@pytest.mark.parametrize('text,reason', [
+    ('090-1234-5678 9', 'phone'), ('9 090-1234-5678', 'phone'),
+    ('tel 09012345678', 'phone'), ('Tel: 090 1234 5678', 'phone'),
+    ('tel09012345678', 'phone'), ('電話09012345678', 'phone'),
+    ('03-1234-5678/03-1234-5679', 'phone'),
+    ('9 (03)1234-5678 9', 'phone'), ('9 +81 90 1234 5678 9', 'phone'),
+    ('4111111111111111 123', 'card_number'),
+    ('123 4111-1111-1111-1111', 'card_number'),
+    ('41111111111111110', 'card_number'),
+    ('9 4111-1111-1111-1111 9', 'card_number'),
+    ('a@example.com-1', 'email'), ('a@example.com2', 'email'),
+])
+def test_sensitive_windows(text, reason):
+    assert classify(text, 'public')[0] == 'C'
+    assert reason in classify(text, 'public')[1]
+    redacted = redact_for_log(text)
+    expected = {
+        'tel 09012345678': 'tel [C]',
+        'Tel: 090 1234 5678': 'Tel: [C]',
+        'tel09012345678': 'tel[C]',
+        '電話09012345678': '電話[C]',
+        '03-1234-5678/03-1234-5679': '[C]/[C]',
+        '9 +81 90 1234 5678 9': '9 [C]',
+        'a@example.com-1': '[C]-1',
+        'a@example.com2': '[C]2',
+    }
+    assert redacted == expected.get(text, '[C]')
+
+
+@pytest.mark.parametrize('separator', ['', ' ', '-'])
+@pytest.mark.parametrize('prefix,suffix', [('', ' 1'), ('1 ', ''), ('1 ', ' 1')])
+def test_personal_number_windows(separator, prefix, suffix):
+    body = '12345678901'
+    number = body + personal_check_digit(body)
+    text = prefix + separator.join(number[i:i + 4] for i in range(0, 12, 4)) + suffix
+    assert classify(text, 'public')[0] == 'C'
+    assert 'personal_number' in classify(text, 'public')[1]
+    assert redact_for_log(text) == '[C]'
+
+
+@pytest.mark.parametrize('text', [
+    '期限 08 2026', '05 10 2026', '〒060-0001', '2026/10/01-2026/10/31',
+    '注文番号 000123', '2222222222222222 123', '123456789013',
+    'react@18.3.1', 'pkg@1.2.3-beta',
+    '来週の会議で新しい企画を紹介するための文章を参加者全員に伝わるように書いてください。',
+    'Please write a clear introduction for everyone attending the meeting.',
+])
+def test_windows_public(text):
+    assert classify(text, 'public') == ('A', [])
+    assert redact_for_log(text) == text
+
+
+def test_checksum_work_is_limited_to_sixty_digits(monkeypatch):
+    import importlib
+    module = importlib.import_module('orch.classify')
+    checked = []
+    monkeypatch.setattr(module, '_checksum_reason', lambda digits: checked.append(digits))
+    assert module._number_reason('2' * 60 + '4111111111111111') is None
+    assert checked and all(set(digits) <= {'2'} for digits in checked)
+    checked.clear()
+    assert module._number_reason('2 ' * 60 + '4111111111111111') is None
+    assert checked and all(set(digits) <= {'2'} for digits in checked)
+
+
+@pytest.mark.parametrize('unit', [
+    '2', '2 ', '2222222222222222 123/',
+    'Please write a clear introduction. ',
+    '会議の参加者に分かりやすい案内文を作成してください。',
+])
+def test_classify_ten_kilobytes_under_half_second(unit):
+    text = (unit * 10240).encode('utf-8')[:10240].decode('utf-8', errors='ignore')
+    start = perf_counter()
+    classify(text, 'public')
+    elapsed = perf_counter() - start
+    assert elapsed < 0.5, elapsed
+
+
+@pytest.mark.parametrize('text', [
+    'https://user:' + 'AIza' + 'x' * 32 + '@example.test/path',   # ユーザー情報の中の鍵の形
+    'https://' + 'AK' + 'IA' + 'X' * 16 + '@example.test/',
+    'https://u:' + '0123456789abcdefghijklmnopqrstuv' + '@example.test/',  # ユーザー情報の中の乱雑な文字列
+])
+def test_url_userinfo_is_inspected(text):
+    # URL を分割しても検出は減らない（自動のセキュリティ審査の指摘 2026-10-17）
+    label, reasons = classify(text, 'public')
+    assert label == 'C' and ('key_shape' in reasons or 'entropy' in reasons)
+    secret = text[len('https://'):text.index('@')]
+    assert secret not in redact_for_log(text)
