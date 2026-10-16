@@ -22,9 +22,49 @@ def _entries(roster):
     return entries
 
 
+def _matches_role(entry, role) -> bool:
+    """role_key（機械用の英小文字のキー）があればそれで、無ければ従来の日本語の role で照合する（後方互換）。"""
+    key = entry.get("role_key")
+    if isinstance(key, str) and key:
+        return key == role or entry["role"] == role
+    return entry["role"] == role
+
+
+def _stops(roster) -> dict:
+    stops = roster.get("stops") if isinstance(roster, dict) else None
+    stops = stops if isinstance(stops, dict) else {}
+    return {
+        "jurisdictions": {str(x).upper() for x in stops.get("jurisdictions", []) if isinstance(x, str)},
+        "providers": {str(x) for x in stops.get("providers", []) if isinstance(x, str)},
+    }
+
+
+def candidates_with_skips(roster, role):
+    """役割に合う行を adopted → trial → 名簿の順で返す。停止中の行（stopped・法域・提供元の一括停止）は除いて理由を返す。"""
+    stops = _stops(roster)
+    cands, skipped = [], []
+    for state in ("adopted", "trial"):
+        for entry in _entries(roster):
+            if not _matches_role(entry, role) or entry.get("state") != state:
+                continue
+            if entry.get("stopped") is True:
+                skipped.append({"id": entry["id"], "why": "stopped"})
+            elif str(entry.get("jurisdiction", "")).upper() in stops["jurisdictions"]:
+                skipped.append({"id": entry["id"], "why": "jurisdiction_stopped"})
+            elif str(entry.get("provider", "")) in stops["providers"]:
+                skipped.append({"id": entry["id"], "why": "provider_stopped"})
+            else:
+                cands.append(entry)
+    return cands, skipped
+
+
+def candidates(roster, role) -> list:
+    return candidates_with_skips(roster, role)[0]
+
+
 def active(roster, role) -> dict:
     """Select adopted before trial; refuse absent or ambiguous assignments."""
-    entries = [entry for entry in _entries(roster) if entry["role"] == role]
+    entries = [entry for entry in _entries(roster) if _matches_role(entry, role)]
     for state in ("adopted", "trial"):
         matches = [entry for entry in entries if entry.get("state") == state]
         if len(matches) > 1:
