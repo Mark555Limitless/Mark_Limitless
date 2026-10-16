@@ -72,6 +72,16 @@ def test_stop_and_log(routing, monkeypatch, isolated_env):
     assert row['skipped'][0]['why'] == 'jurisdiction_stopped'
 
 
+def test_purpose_is_redacted_before_adapters(routing, monkeypatch):
+    # purpose は利用者の入力から来うる。アダプタ（台帳・ログに書く側）へ渡る前に伏せて 80 字に切る
+    seen = Mock(return_value=gemini.Result(0, 'ok', 'output'))
+    monkeypatch.setattr(gemini, 'generate', seen)
+    long = 'x' * 200
+    router.route('本文', role='drafter', origin='public', purpose='mail test@example.test key ' + 'ghp_' + 'x' * 35 + long)
+    passed = seen.call_args.kwargs['purpose']
+    assert 'test@example.test' not in passed and 'ghp_' not in passed and len(passed) <= 80
+
+
 def test_no_candidates(routing):
     assert router.route('hello', role='missing', origin='public').rc == 2
 
@@ -90,7 +100,7 @@ def test_cli(routing, monkeypatch, capsys, rc):
     if rc == config.HALT_EXIT_CODE:
         call.side_effect = config.GlobalHalt()
     monkeypatch.setattr(router, 'route', call)
-    monkeypatch.setattr('sys.stdin', io.StringIO('hello'))
+    monkeypatch.setattr('sys.stdin', io.TextIOWrapper(io.BytesIO(b'hello'), encoding='utf-8'))
     assert router.main(['run', '--role', 'drafter', '--origin', 'public']) == rc
     out = capsys.readouterr()
     assert out.out == ('answer' if rc == 0 else '')
@@ -135,3 +145,37 @@ def test_private_still_passes_adapter_gate(routing):
     result = router.route('非公開の依頼', role='drafter', origin='private')
     assert result.rc == 2
     gemini.requests.post.assert_not_called()
+
+
+def test_adapter_halt_logged_once(routing, monkeypatch, isolated_env):
+    halted = Mock(side_effect=config.GlobalHalt())
+    fallback = Mock(side_effect=AssertionError('must not fall back'))
+    monkeypatch.setattr(gemini, 'generate', halted)
+    monkeypatch.setattr(fugu, 'generate', fallback)
+    with pytest.raises(config.GlobalHalt):
+        router.route('本文を保存しない', role='drafter', origin='public')
+    raw = (isolated_env / 'data/router_log.jsonl').read_text()
+    rows = [json.loads(line) for line in raw.splitlines()]
+    assert len(rows) == 1
+    assert rows[0]['final_rc'] == config.HALT_EXIT_CODE
+    assert rows[0]['reasons'] == ['global_halt']
+    assert rows[0]['tries'][0]['reason'] == 'global_halt'
+    assert '本文を保存しない' not in raw
+    fallback.assert_not_called()
+
+
+def test_adapter_halt_survives_logging_failure(routing, monkeypatch):
+    monkeypatch.setattr(gemini, 'generate', Mock(side_effect=config.GlobalHalt()))
+    monkeypatch.setattr(config, 'data_dir', Mock(side_effect=OSError()))
+    with pytest.raises(config.GlobalHalt):
+        router.route('hello', role='drafter', origin='public')
+
+
+def test_cli_invalid_utf8(routing, monkeypatch, capsys):
+    call = Mock(side_effect=AssertionError('must not route'))
+    monkeypatch.setattr(router, 'route', call)
+    monkeypatch.setattr('sys.stdin', io.TextIOWrapper(io.BytesIO(b'hello\xff'), encoding='utf-8'))
+    assert router.main(['run', '--role', 'drafter', '--origin', 'public']) == 2
+    out = capsys.readouterr()
+    assert out.out == '' and out.err == 'router: invalid_input\n'
+    call.assert_not_called()

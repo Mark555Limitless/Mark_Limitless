@@ -23,10 +23,10 @@ def _entries(roster):
 
 
 def _matches_role(entry, role) -> bool:
-    """role_key（機械用の英小文字のキー）があればそれで、無ければ従来の日本語の role で照合する（後方互換）。"""
+    """role_key と従来の日本語の role のどちらでも照合する。"""
     key = entry.get("role_key")
     if isinstance(key, str) and key:
-        return key == role
+        return key == role or entry["role"] == role
     return entry["role"] == role
 
 
@@ -47,7 +47,7 @@ def candidates_with_skips(roster, role):
         for entry in _entries(roster):
             if not _matches_role(entry, role) or entry.get("state") != state:
                 continue
-            if entry.get("stopped") is True:
+            if entry.get("stopped") is not False and entry.get("stopped") is not None:
                 skipped.append({"id": entry["id"], "why": "stopped"})
             elif str(entry.get("jurisdiction", "")).upper() in stops["jurisdictions"]:
                 skipped.append({"id": entry["id"], "why": "jurisdiction_stopped"})

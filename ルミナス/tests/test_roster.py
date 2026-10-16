@@ -99,11 +99,11 @@ def test_ambiguous_active_is_refused():
         roster.active(data, "draft")
 
 
-def test_role_key_precedes_legacy_role():
+def test_role_key_and_legacy_role():
     data = pair()
     data['entries'][0]['role_key'] = 'drafter'
     assert roster.active(data, 'drafter')['id'] == 'A'
-    assert roster.active(data, 'draft')['id'] == 'B'
+    assert roster.active(data, 'draft')['id'] == 'A'
 
 
 def test_candidate_order_and_stop_reasons():
@@ -128,3 +128,31 @@ def test_switch_rollback_with_role_key():
     switched = roster.plan_switch(data, 'drafter', 'B')
     assert roster.active(switched, 'drafter')['id'] == 'B'
     assert roster.active(roster.plan_rollback(switched, 'drafter'), 'drafter')['id'] == 'A'
+
+
+@pytest.mark.parametrize('module,key', [('gemini', 'drafter'), ('jev', 'signal')])
+def test_japanese_roles_with_key(adapter_roster, module, key):
+    from orch import gemini, jev
+    role = {'gemini': gemini, 'jev': jev}[module].ROLE
+    data = json.loads(adapter_roster.read_text())
+    entry = next(e for e in data['entries'] if e['role'] == role)
+    entry['role_key'] = key
+    assert roster.active(data, role) is entry
+    assert roster.active(data, key) is entry
+    assert roster.candidates(data, key) == [entry]
+    assert roster.candidates(data, role) == [entry]
+    with pytest.raises(ValueError, match='role_unavailable'):
+        roster.active(data, 'other')
+
+
+@pytest.mark.parametrize('value,stopped', [
+    (True, True), ('true', True), (1, True), ('yes', True),
+    (0, True), ('false', True), ('', True), ([], True),
+    (False, False), (None, False),
+])
+def test_stopped_fails_closed(value, stopped):
+    data = pair()
+    data['entries'][0]['stopped'] = value
+    candidates, skips = roster.candidates_with_skips(data, 'draft')
+    assert [e['id'] for e in candidates] == (['B'] if stopped else ['A', 'B'])
+    assert skips == ([{'id': 'A', 'why': 'stopped'}] if stopped else [])

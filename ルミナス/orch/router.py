@@ -55,6 +55,8 @@ def route(prompt: str, *, role: str, origin: Optional[str] = None,
     start = time.monotonic()
     if config.global_halt():
         raise config.GlobalHalt()
+    # purpose は利用者の入力から来うるので、アダプタの台帳・ログに渡す前に伏せて短く切る（自動のセキュリティ審査の指摘 2026-10-17）
+    purpose = redact_for_log(str(purpose or ""))[:80]
     label, reasons = classify(prompt, origin)
     result = RouteResult(4 if label == "C" else 2,
                          "data_class_c" if label == "C" else "no_candidates",
@@ -87,6 +89,15 @@ def route(prompt: str, *, role: str, origin: Optional[str] = None,
         try:
             response = adapter.generate(prompt, data_class=label, entry_id=entry["id"],
                                         purpose=purpose, timeout=timeout)
+        except config.GlobalHalt:
+            result.rc, result.reason = config.HALT_EXIT_CODE, "global_halt"
+            result.entry_id = entry["id"]
+            result.reasons.append("global_halt")
+            result.tries.append(dict(entry_id=entry["id"], rc=result.rc,
+                                     reason=result.reason, sec=time.monotonic() - attempt_start,
+                                     usd=None))
+            finish(len(prompt))
+            raise
         except Exception:
             response = RouteResult(2, "adapter_error")
         result.rc, result.reason = response.rc, response.reason
@@ -125,7 +136,12 @@ def main(argv=None):
             except Exception:
                 print("router: roster_unavailable", file=sys.stderr)
                 return 2
-        result = route(sys.stdin.read(), role=args.role, origin=args.origin,
+        try:
+            prompt = sys.stdin.buffer.read().decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            print("router: invalid_input", file=sys.stderr)
+            return 2
+        result = route(prompt, role=args.role, origin=args.origin,
                        purpose=args.purpose, max_tries=args.max_tries)
     except config.GlobalHalt:
         print("router: 全体停止中", file=sys.stderr)
