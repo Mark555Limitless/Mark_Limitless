@@ -204,3 +204,43 @@ def test_loop_halt_records_completed_attempts(routing, monkeypatch, isolated_env
         assert row['tries'][0]['reason'] == 'API障害'
     assert '本文を保存しない' not in raw
     second.assert_not_called()
+
+
+@pytest.mark.parametrize('stops', [None, [], 'stop', {'jurisdictions': 'US'},
+                                 {'providers': 'google'}, {'providers': [1]}])
+def test_invalid_stops_block_routing(routing, monkeypatch, isolated_env, stops):
+    path, data = routing
+    data['stops'] = stops
+    path.write_text(json.dumps(data))
+    call = Mock(side_effect=AssertionError('adapter must not run'))
+    monkeypatch.setattr(gemini, 'generate', call)
+    monkeypatch.setattr(fugu, 'generate', call)
+    result = router.route('hello', role='drafter', origin='public')
+    assert result.rc == 2 and result.reason == 'roster_unavailable'
+    assert result.tries == []
+    call.assert_not_called()
+    row = json.loads((isolated_env / 'data/router_log.jsonl').read_text())
+    assert row['tries'] == [] and row['final_rc'] == 2
+
+
+@pytest.mark.parametrize('empty', [False, True])
+def test_check_rejects_invalid_stops(routing, capsys, empty):
+    path, data = routing
+    if empty:
+        data['entries'] = []
+    data['stops'] = {'providers': 'google'}
+    path.write_text(json.dumps(data))
+    assert router.main(['check']) == 2
+    output = capsys.readouterr()
+    assert output.out == '' and output.err == 'router: roster_unavailable\n'
+
+
+def test_private_purpose_redacted_before_adapter_and_log(routing, monkeypatch, isolated_env):
+    purpose = '/' + 'Users/x/secret'
+    call = Mock(return_value=gemini.Result(0, 'ok', 'done'))
+    monkeypatch.setattr(gemini, 'generate', call)
+    result = router.route('hello', role='drafter', origin='public', purpose=purpose)
+    assert result.rc == 0 and call.call_args.kwargs['purpose'] == '[C]'
+    raw = (isolated_env / 'data/router_log.jsonl').read_text()
+    assert purpose not in raw and 'secret' not in raw
+    assert json.loads(raw)['purpose'] == '[C]'

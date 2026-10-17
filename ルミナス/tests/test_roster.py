@@ -156,3 +156,31 @@ def test_stopped_fails_closed(value, stopped):
     candidates, skips = roster.candidates_with_skips(data, 'draft')
     assert [e['id'] for e in candidates] == (['B'] if stopped else ['A', 'B'])
     assert skips == ([{'id': 'A', 'why': 'stopped'}] if stopped else [])
+
+
+@pytest.mark.parametrize('stops', [None, [], 'stop', 1,
+    {'jurisdictions': 'CN'}, {'providers': 'google'},
+    {'jurisdictions': None}, {'providers': {}},
+    {'jurisdictions': [1]}, {'providers': ['google', None]},
+])
+@pytest.mark.parametrize('select', [roster.candidates_with_skips, roster.active])
+def test_invalid_stops_fail_closed(stops, select):
+    data = pair()
+    data['stops'] = stops
+    with pytest.raises(ValueError, match='^invalid_roster$'):
+        select(data, 'draft')
+
+
+@pytest.mark.parametrize('field,value,stop,reason', [
+    ('provider', 'google', ' Google ', 'provider_stopped'),
+    ('provider', ' Google ', 'google', 'provider_stopped'),
+    ('jurisdiction', 'US', ' us ', 'jurisdiction_stopped'),
+    ('jurisdiction', ' us ', 'US', 'jurisdiction_stopped'),
+])
+def test_stop_names_are_normalized(field, value, stop, reason):
+    data = pair()
+    data['entries'][0][field] = value
+    data['stops'] = {'providers' if field == 'provider' else 'jurisdictions': [stop]}
+    candidates, skipped = roster.candidates_with_skips(data, 'draft')
+    assert [entry['id'] for entry in candidates] == ['B']
+    assert skipped == [{'id': 'A', 'why': reason}]

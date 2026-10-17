@@ -189,7 +189,7 @@ def test_explicit_commit_context(prefix, suffix):
 @pytest.mark.parametrize('text', [
     'https://www.example.com/news/2026/10/16/internationalization-and-localization-guidelines',
     'https://example.test/?page=2&sort=asc',
-    'https://' + _RANDOM_VALUE + '.test/',
+    # Hostnames now retain key-shape inspection; covered by sensitive tests below.
     'https://x.test/abcdefghijklmnop/qrstuvwxyz012345',
     'https://x.test/?f=abcdefghijklmnop&g=qrstuvwxyz012345',
 ])
@@ -229,7 +229,8 @@ def test_sensitive_windows(text, reason):
         'Tel: 090 1234 5678': 'Tel: [C]',
         'tel09012345678': 'tel[C]',
         '電話09012345678': '電話[C]',
-        '03-1234-5678/03-1234-5679': '[C]/[C]',
+        # Slash is now a number separator, so the entire sensitive run is hidden.
+        '03-1234-5678/03-1234-5679': '[C]',
         '9 +81 90 1234 5678 9': '9 [C]',
         'a@example.com-1': '[C]-1',
         'a@example.com2': '[C]2',
@@ -260,16 +261,19 @@ def test_windows_public(text):
     assert redact_for_log(text) == text
 
 
-def test_checksum_work_is_limited_to_sixty_digits(monkeypatch):
+def test_checksum_limit_applies_only_to_unbroken_runs(monkeypatch):
     import importlib
     module = importlib.import_module('orch.classify')
     checked = []
     monkeypatch.setattr(module, '_checksum_reason', lambda digits: checked.append(digits))
-    assert module._number_reason('2' * 60 + '4111111111111111') is None
-    assert checked and all(set(digits) <= {'2'} for digits in checked)
+    # Overlong runs must fail closed; separated groups must all be inspected.
+    assert module._number_reason('2' * 60 + '4111111111111111') == 'long_number'
+    assert not checked
+    assert module._number_reason('2' * 60) is None
+    assert checked and all(len(digits) <= 19 for digits in checked)
     checked.clear()
     assert module._number_reason('2 ' * 60 + '4111111111111111') is None
-    assert checked and all(set(digits) <= {'2'} for digits in checked)
+    assert '4111111111111111' in checked
 
 
 @pytest.mark.parametrize('unit', [
@@ -296,3 +300,126 @@ def test_url_userinfo_is_inspected(text):
     assert label == 'C' and ('key_shape' in reasons or 'entropy' in reasons)
     secret = text[len('https://'):text.index('@')]
     assert secret not in redact_for_log(text)
+
+
+@pytest.mark.parametrize('text,reason', [
+    ('{"url":"https://a.test","key":"' + 'sk-' + 'x' * 32 + '"}', 'key_shape'),
+    ('url,api_key\nhttps://a.test,' + 'sk-' + 'x' * 32, 'key_shape'),
+    ('{"endpoint":"https://a.test","token":"' + _HEX_VALUE + '"}', 'key_shape'),
+    ('https://a.test;token=' + 'Z' * 32, 'key_shape'),
+    ('https://' + 'AIza' + 'x' * 32 + '.h.test/', 'key_shape'),
+    ('https://' + _RANDOM_VALUE + '.test/', 'key_shape'),
+    ('\t'.join(['2222222'] * 9) + ' 4111111111111111', 'card_number'),
+    ('2' * 61, 'long_number'),
+    ('a09012345678', 'phone'), ('card4111111111111111', 'card_number'),
+    ('090-1234-5678 9', 'phone'),
+])
+def test_final_sensitive_regressions(text, reason):
+    label, reasons = classify(text, 'public')
+    assert label == 'C' and reason in reasons
+    assert redact_for_log(text) != text
+
+
+@pytest.mark.parametrize('delimiter', ['"', "'", ',', ';', '|', '<', '>', '(', ')', '[', ']', '{', '}', ' ', '文'])
+def test_url_delimiters_do_not_hide_secrets(delimiter):
+    text = 'https://a.test' + delimiter + 'sk-' + 'x' * 32
+    assert 'key_shape' in classify(text, 'public')[1]
+
+
+@pytest.mark.parametrize('separator', ['/', '_', ',', '.', '\n', '\r\n', '\t'])
+def test_number_separator_bypasses(separator):
+    for groups, reason in [(['090', '1234', '5678'], 'phone'),
+                           (['4111', '1111', '1111', '1111'], 'card_number')]:
+        text = separator.join(groups)
+        assert reason in classify(text, 'public')[1]
+        assert redact_for_log(text) == '[C]'
+
+
+@pytest.mark.parametrize('text', [
+    'https://arxiv.org/abs/2410.12345',
+    'https://docs.python.org/3.9/library/re.html',
+    'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    'https://docs.google.com/document/d/1AbCdEfGhIjKlMnOp/edit',
+    'amazon.co.jp/dp/B0C1234567',
+    'self.assertEqual(x,1)', 'MyClass.method(arg1)',
+    '2026-10-01 2026-10-31', '2026/10/01-2026/10/31',
+    'version 1.0.0 2.0.0 3.0.0 4.0.0', '10 20 30 40 50 60',
+    '売上は 10000000000 円', 'timestamp 1760612345678',
+    'uuid 550e8400-e29b-41d4-a716-446655440000',
+    'https://[2001:db8::1]:443/path',
+])
+def test_final_public_regressions(text):
+    assert classify(text, 'public') == ('A', [])
+    assert redact_for_log(text) == text
+
+
+@pytest.mark.parametrize('path', ['status', 'statuses'])
+@pytest.mark.parametrize('digits', ['411111111111111', '4111111111111111111', '41111111111111111111'])
+def test_public_post_ids(path, digits):
+    text = 'https://x.com/example/' + path + '/' + digits
+    assert classify(text, 'public') == ('A', [])
+    assert redact_for_log(text) == text
+
+
+@pytest.mark.parametrize('prefix', ['', '/status/', 'https://x.test/?id=/status/',
+                                     'https://x.test/#/status/', 'https://x.test/status/'])
+def test_post_id_exception_does_not_hide_other_numbers(prefix):
+    # A 21-digit run must not be partially mistaken for a public post ID.
+    text = prefix + '411111111111111111111'
+    assert 'card_number' in classify(text, 'public')[1]
+
+
+def test_post_id_query_remains_inspected():
+    text = 'https://x.com/u/status/4111111111111111111?card=4111111111111111'
+    assert 'card_number' in classify(text, 'public')[1]
+    assert 'card=[C]' in redact_for_log(text)
+
+
+@pytest.mark.parametrize('char', ['\u200b', '\u200c', '\u200d', '\ufeff'])
+def test_format_characters_do_not_hide_keys(char):
+    text = 'AIza' + char + 'x' * 32
+    assert 'key_shape' in classify(text, 'public')[1]
+    assert 'x' * 32 not in redact_for_log(text)
+
+
+@pytest.mark.parametrize('text', ['a' * 20000, 'a' * 20000 + '@', 'a.' * 4000 + '@' + 'a.' * 1000])
+def test_long_ascii_under_half_second(text):
+    start = perf_counter()
+    classify(text, 'public')
+    assert perf_counter() - start < 0.5
+
+
+@pytest.mark.parametrize('text', ['.env', '.env.local', '/' + 'Users/x/secret',
+                                 '/home/x/secret', 'C:\\Users\\x\\secret',
+                                 '_\u975e\u516c\u958b/secret', 'settings.local.json'])
+def test_private_paths_redacted(text):
+    assert redact_for_log(text) == '[C]'
+
+
+@pytest.mark.parametrize('text,reason', [
+    ('0901/23/45/678', 'phone'),
+    ('4111/11/11/1111/1111', 'card_number'),
+    ('0901-23-45-678', 'phone'),
+])
+def test_date_like_number_groups_remain_inspected(text, reason):
+    assert reason in classify(text, 'public')[1]
+    assert redact_for_log(text) == '[C]'
+
+
+@pytest.mark.parametrize('prefix,suffix', [('a', ''), ('', 'a'), ('_', ''), ('', '-x')])
+def test_uuid_exception_does_not_hide_long_keys(prefix, suffix):
+    text = prefix + '550e8400-e29b-41d4-a716-446655440000' + suffix
+    assert 'key_shape' in classify(text, 'public')[1]
+
+
+@pytest.mark.parametrize('text', ['version 090.123.456 78',
+                                 'https://a.test:bad/' + 'sk-' + 'x' * 32])
+def test_public_exceptions_do_not_hide_sensitive_values(text):
+    assert classify(text, 'public')[0] == 'C'
+
+
+def test_post_id_exception_only_for_known_hosts():
+    # 投稿 ID の除外は X／Twitter のホストだけ。任意のホストの /status/ で数字は逃げない（再審査の指摘 2026-10-17）
+    assert 'card_number' in classify('https://a.test/status/4111111111111111', 'public')[1]
+    assert classify('https://x.com/u/status/4111111111111111111', 'public') == ('A', [])
+    assert classify('https://mobile.twitter.com/u/status/1234567890123456789', 'public') == ('A', [])

@@ -3,6 +3,12 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-17 午後 振り分け役 v0 の 1 週目が審査に合格（司令塔: Claude Fable 5.1）
+- 状態: `orch/classify.py`・`orch/router.py`・`orch/roster.py` と試験をコミット済み。Opus 審査 APPROVE（4 回目）。pytest 1188 passed・hooks 247 passed。CLI: `python3 -m orch.router run --role drafter --origin public < prompt.txt`／`python3 -m orch.router check`
+- 決定: 投稿 URL の ID は X／Twitter のホストだけ除外（任意のホストの `/status/` では除外しない）。司令塔の直接修正 2 件（`_URL_HEAD` のユーザー情報・投稿 ID のホスト限定）は CLAUDE.md の例外（小さな修正）として記録
+- 未解決: (1) `docs/specs/20261016_stops_in_gate.md`（直接呼び出しとゲートでも停止条件を効かせる。セキュリティ審査の指摘） (2) `docs/specs/20261017_classify_followups.md`（偽陽性 3 件と区切りの拡張。急がない） (3) 名簿に `role_key`・`jurisdiction`（Mark の確認。候補: commander・researcher・verifier・implementer・sparring・drafter・signal・measure／US・JP。Jev の法域は契約主体の確認が要る） (4) ROUTINE §2 に「壁打ちの往復中は回答と記録だけ」（Mark の確認つきの編集） (5) Fugu の実請求との照合（Mark）
+- 次の一手: (1) → (2) → (3) → 受入条件 1「模擬の鍵・電話・メールを含む依頼 10 件が 10 件とも C で外へ送られない」の実地確認（`orch.router` で区分 A の実呼び出し 1 回も含む）
+
 ## 2026-10-17 未明 振り分け役 v0 の 1 週目（実装済み・審査待ち）（司令塔: Claude Fable 5.1）
 - 状態: 未コミット＝`orch/classify.py`・`orch/router.py`・`tests/test_classify.py`・`tests/test_router.py`（新規）、`orch/roster.py`・`orch/gemini.py`（Result に sec・usd）・`tests/test_roster.py`、指示書 `docs/specs/20261016_stops_in_gate.md`。試験 880 passed・hooks 247 passed。Opus の審査を再開中（月の支出上限で一度止まった）
 - Mark の指示: この窓で続ける。Codex の指摘（壁打ちの往復中に実装を始めた）→ ADR `state/decisions/20261016-consult-vs-implement.md`（往復中は回答と記録だけ・2 つの窓で動かさない）

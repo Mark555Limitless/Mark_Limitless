@@ -130,6 +130,7 @@ def main(argv=None):
         if args.cmd == "check":
             try:
                 data = _load_roster()
+                roster._stops(data)  # Validate even when no roles are configured.
                 roles = dict.fromkeys(e.get("role_key") or e["role"] for e in data["entries"])
                 for role in roles:
                     candidates, skipped = roster.candidates_with_skips(data, role)

@@ -31,12 +31,18 @@ def _matches_role(entry, role) -> bool:
 
 
 def _stops(roster) -> dict:
-    stops = roster.get("stops") if isinstance(roster, dict) else None
-    stops = stops if isinstance(stops, dict) else {}
-    return {
-        "jurisdictions": {str(x).upper() for x in stops.get("jurisdictions", []) if isinstance(x, str)},
-        "providers": {str(x) for x in stops.get("providers", []) if isinstance(x, str)},
-    }
+    if not isinstance(roster, dict):
+        raise ValueError("invalid_roster")
+    stops = roster.get("stops", {})
+    if not isinstance(stops, dict):
+        raise ValueError("invalid_roster")
+    result = {}
+    for name in ("jurisdictions", "providers"):
+        values = stops.get(name, [])
+        if not isinstance(values, list) or any(not isinstance(x, str) for x in values):
+            raise ValueError("invalid_roster")
+        result[name] = {x.strip().casefold() for x in values}
+    return result
 
 
 def candidates_with_skips(roster, role):
@@ -49,9 +55,9 @@ def candidates_with_skips(roster, role):
                 continue
             if entry.get("stopped") is not False and entry.get("stopped") is not None:
                 skipped.append({"id": entry["id"], "why": "stopped"})
-            elif str(entry.get("jurisdiction", "")).upper() in stops["jurisdictions"]:
+            elif str(entry.get("jurisdiction", "")).strip().casefold() in stops["jurisdictions"]:
                 skipped.append({"id": entry["id"], "why": "jurisdiction_stopped"})
-            elif str(entry.get("provider", "")) in stops["providers"]:
+            elif str(entry.get("provider", "")).strip().casefold() in stops["providers"]:
                 skipped.append({"id": entry["id"], "why": "provider_stopped"})
             else:
                 cands.append(entry)
@@ -64,6 +70,7 @@ def candidates(roster, role) -> list:
 
 def active(roster, role) -> dict:
     """Select adopted before trial; refuse absent or ambiguous assignments."""
+    _stops(roster)
     entries = [entry for entry in _entries(roster) if _matches_role(entry, role)]
     for state in ("adopted", "trial"):
         matches = [entry for entry in entries if entry.get("state") == state]
