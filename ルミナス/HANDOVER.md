@@ -4,6 +4,7 @@
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
 ## 2026-10-17 夜 [伝] の再指示と、名簿・ROUTINE の承認（司令塔: Claude Fable 5.1）
+- Mark の決定（ベンダーのプラグイン）: 入れない。必要になったら公開の手引きを読んで要る部分だけ `docs/` に写す（確認不要・記録する）。ADR `state/decisions/20261017-vendor-plugins.md`
 - Mark の指示: [伝] を同じ原文で再指示（3 回目）。承認: 名簿の `role_key`・`jurisdiction`／ROUTINE §2「壁打ちと実装を分ける」
 - 反映: CLAUDE.md・ROUTINE §2・最終プロンプト §6・`tell-rule.sh`・記憶（途中の一言は「〜中」の 1 文だけ／完了の報告に試験の件数・審査の合否・コミット番号を並べない）。名簿の全 9 行に `role_key`（commander・researcher・verifier・implementer・sparring×2・drafter・signal・measure）と `jurisdiction`（US×8・JP）。Jev は `jurisdiction_note` に「契約主体は未確認」
 - 未解決: `docs/specs/20261017_classify_followups.md`（急がない）／Jev の契約主体（Mark）／審査の軽い指摘 2 件（`_entries` の型検査・切替の試験の assert）
