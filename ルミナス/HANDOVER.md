@@ -3,6 +3,12 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-17 夜 [伝] の再指示と、名簿・ROUTINE の承認（司令塔: Claude Fable 5.1）
+- Mark の指示: [伝] を同じ原文で再指示（3 回目）。承認: 名簿の `role_key`・`jurisdiction`／ROUTINE §2「壁打ちと実装を分ける」
+- 反映: CLAUDE.md・ROUTINE §2・最終プロンプト §6・`tell-rule.sh`・記憶（途中の一言は「〜中」の 1 文だけ／完了の報告に試験の件数・審査の合否・コミット番号を並べない）。名簿の全 9 行に `role_key`（commander・researcher・verifier・implementer・sparring×2・drafter・signal・measure）と `jurisdiction`（US×8・JP）。Jev は `jurisdiction_note` に「契約主体は未確認」
+- 未解決: `docs/specs/20261017_classify_followups.md`（急がない）／Jev の契約主体（Mark）／審査の軽い指摘 2 件（`_entries` の型検査・切替の試験の assert）
+- 次の一手: 受入条件 1「模擬の 10 件が 10 件とも C で外へ送られない」の実地確認（`orch.router` で区分 A の実呼び出し 1 回も含む）→ classify_followups
+
 ## 2026-10-17 夕 停止条件をすべての送信経路で（司令塔: Claude Fable 5.1）
 - 状態: コミット済み。停止条件（`stopped`・`stops`）がゲート `gate._entry` と `roster.active()` でも効く（fail-closed）。Opus 審査 APPROVE。pytest 1223 passed・hooks 247 passed
 - 未解決: (1) 名簿に `role_key`・`jurisdiction`（Mark の承認待ち。案は 2026-10-17 午後の節） (2) `docs/specs/20261017_classify_followups.md`（偽陽性 4 件＋セキュリティ審査の 3 件。急がない） (3) ROUTINE §2 に「壁打ちの往復中は回答と記録だけ」（Mark の確認つき） (4) Fugu の実請求との照合＝**済み**（Mark の報告 10/15 $0.1＝台帳 $0.10053。ADR `20261015-sakana-fugu.md` 追記） (5) 審査の軽い指摘: `_entries` でも型を検査・切替の試験に switch_history の assert

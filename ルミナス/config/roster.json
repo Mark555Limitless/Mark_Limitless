@@ -8,6 +8,8 @@
   "entries": [
     {
       "id": "claude-commander",
+      "role_key": "commander",
+      "jurisdiction": "US",
       "role": "司令塔",
       "provider": "anthropic",
       "model": "claude-fable-5-1",
@@ -23,6 +25,8 @@
     },
     {
       "id": "claude-researcher",
+      "role_key": "researcher",
+      "jurisdiction": "US",
       "role": "調査役",
       "provider": "anthropic",
       "model": "claude-sonnet-5-5",
@@ -38,6 +42,8 @@
     },
     {
       "id": "claude-verifier",
+      "role_key": "verifier",
+      "jurisdiction": "US",
       "role": "検証役",
       "provider": "anthropic",
       "model": "claude-opus-5-5",
@@ -53,6 +59,8 @@
     },
     {
       "id": "codex-implementer",
+      "role_key": "implementer",
+      "jurisdiction": "US",
       "role": "実装役",
       "provider": "openai",
       "model": "gpt-6-astra",
@@ -68,6 +76,8 @@
     },
     {
       "id": "codex-luna-sparring",
+      "role_key": "sparring",
+      "jurisdiction": "US",
       "role": "壁打ち・定型の下請けの候補",
       "provider": "openai",
       "model": "gpt-6-luna",
@@ -84,6 +94,8 @@
     },
     {
       "id": "gemini-drafter",
+      "role_key": "drafter",
+      "jurisdiction": "US",
       "role": "下書き・別の視点",
       "provider": "google",
       "model": "gemini-3.8-flash",
@@ -100,6 +112,8 @@
     },
     {
       "id": "gemini-argon-sparring",
+      "role_key": "sparring",
+      "jurisdiction": "US",
       "role": "壁打ち（別の視点）",
       "provider": "google",
       "model": "gemini-4-argon",
@@ -116,6 +130,9 @@
     },
     {
       "id": "jev-signal",
+      "role_key": "signal",
+      "jurisdiction": "US",
+      "jurisdiction_note": "TypeSafe の契約主体は未確認（Mark の承認 2026-10-17 で暫定 US）",
       "role": "構造化判断の信号（止める側だけ）",
       "provider": "typesafe",
       "model": "jev-latest",
@@ -132,6 +149,8 @@
     },
     {
       "id": "sakana-fugu-max",
+      "role_key": "measure",
+      "jurisdiction": "JP",
       "role": "外部オーケストレーターの実測",
       "provider": "sakana",
       "model": "fugu-max",
