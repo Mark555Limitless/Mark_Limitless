@@ -497,3 +497,32 @@ def test_one_unknown_does_not_stop(keyed, monkeypatch):
     usage.record("gemini", usd=0.05, status="error", unknown=True)
     monkeypatch.setattr(gemini.requests, "post", lambda url, **k: FakeResp(200, OK))
     assert gemini.generate("x", data_class="A").rc == 0
+
+
+@pytest.mark.parametrize("kind", ["row", "jurisdictions", "providers"])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_roster_stops_block_network(keyed, monkeypatch, isolated_env, adapter_roster,
+                                   capsys, kind, explicit):
+    import io
+    import json
+    from unittest.mock import Mock
+    data = json.loads(adapter_roster.read_text())
+    entry = next(e for e in data["entries"] if e["id"] == "gemini-drafter")
+    entry["jurisdiction"] = "US"
+    if kind == "row":
+        entry["stopped"] = True
+    else:
+        data["stops"] = {kind: ["us" if kind == "jurisdictions" else entry["provider"]]}
+    adapter_roster.write_text(json.dumps(data))
+    post = Mock(side_effect=_no_call)
+    monkeypatch.setattr(gemini.requests, "post", post)
+    monkeypatch.setattr(gemini.sys, "stdin", io.StringIO("public"))
+    args = ["gen", "--data-class", "A"]
+    if explicit:
+        args += ["--entry", entry["id"]]
+    assert gemini.main(args) == 2
+    # Existing adapter maps active()'s ValueError to roster_selection.
+    assert ("entry_stopped" if explicit else "roster_selection") in capsys.readouterr().err
+    post.assert_not_called()
+    assert gate_rows(isolated_env) == []
+    assert read_ledger(isolated_env)[-1]["calls"] == 0

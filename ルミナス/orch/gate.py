@@ -39,6 +39,8 @@ from fractions import Fraction
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from . import roster as roster_rules
+
 
 _REQUIRED = set("id role provider model version_kind state max_data_class hosts "
                 "price evidence rollback_to review_by".split())
@@ -97,7 +99,15 @@ def load_roster(path) -> dict:
     except (OSError, ValueError, TypeError, RecursionError):
         raise GateDenied("roster_unreadable") from None
     _entries(roster)
+    _stop_reason(roster, {})
     return roster
+
+
+def _stop_reason(roster, entry):
+    try:
+        return roster_rules.stop_reason(roster, entry)
+    except ValueError:
+        raise GateDenied("invalid_stops") from None
 
 
 def _entry(roster, entry_id):
@@ -105,6 +115,8 @@ def _entry(roster, entry_id):
         if entry["id"] == entry_id:
             if entry["state"] not in ("adopted", "trial"):
                 raise GateDenied("entry_inactive")
+            if _stop_reason(roster, entry) is not None:
+                raise GateDenied("entry_stopped")
             return entry
     raise GateDenied("unknown_entry")
 

@@ -6,6 +6,7 @@ No files are read or written here; rollback_to's human prose is left intact.
 """
 
 from copy import deepcopy
+from typing import Optional
 
 
 def _entries(roster):
@@ -45,20 +46,29 @@ def _stops(roster) -> dict:
     return result
 
 
+def stop_reason(roster, entry) -> Optional[str]:
+    """Return the first stop reason, validating all bulk stops fail-closed."""
+    stops = _stops(roster)
+    if entry.get("stopped") is not False and entry.get("stopped") is not None:
+        return "stopped"
+    if str(entry.get("jurisdiction", "")).strip().casefold() in stops["jurisdictions"]:
+        return "jurisdiction_stopped"
+    if str(entry.get("provider", "")).strip().casefold() in stops["providers"]:
+        return "provider_stopped"
+    return None
+
+
 def candidates_with_skips(roster, role):
     """役割に合う行を adopted → trial → 名簿の順で返す。停止中の行（stopped・法域・提供元の一括停止）は除いて理由を返す。"""
-    stops = _stops(roster)
+    _stops(roster)
     cands, skipped = [], []
     for state in ("adopted", "trial"):
         for entry in _entries(roster):
             if not _matches_role(entry, role) or entry.get("state") != state:
                 continue
-            if entry.get("stopped") is not False and entry.get("stopped") is not None:
-                skipped.append({"id": entry["id"], "why": "stopped"})
-            elif str(entry.get("jurisdiction", "")).strip().casefold() in stops["jurisdictions"]:
-                skipped.append({"id": entry["id"], "why": "jurisdiction_stopped"})
-            elif str(entry.get("provider", "")).strip().casefold() in stops["providers"]:
-                skipped.append({"id": entry["id"], "why": "provider_stopped"})
+            reason = stop_reason(roster, entry)
+            if reason is not None:
+                skipped.append({"id": entry["id"], "why": reason})
             else:
                 cands.append(entry)
     return cands, skipped
@@ -70,8 +80,7 @@ def candidates(roster, role) -> list:
 
 def active(roster, role) -> dict:
     """Select adopted before trial; refuse absent or ambiguous assignments."""
-    _stops(roster)
-    entries = [entry for entry in _entries(roster) if _matches_role(entry, role)]
+    entries = candidates(roster, role)
     for state in ("adopted", "trial"):
         matches = [entry for entry in entries if entry.get("state") == state]
         if len(matches) > 1:
@@ -83,10 +92,12 @@ def active(roster, role) -> dict:
 
 def plan_switch(roster, role, new_id) -> dict:
     plan = deepcopy(roster)
-    old = active(plan, role)
     new = next((entry for entry in _entries(plan) if entry["id"] == new_id), None)
-    if (new is None or new is old or not _matches_role(new, role)
-            or new.get("state") != "trial"):
+    if (new is None or not _matches_role(new, role)
+            or new.get("state") != "trial" or stop_reason(plan, new) is not None):
+        raise ValueError("invalid_switch")
+    old = active(plan, role)
+    if new is old:
         raise ValueError("invalid_switch")
     history = plan.setdefault("switch_history", [])
     if not isinstance(history, list):

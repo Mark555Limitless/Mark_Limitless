@@ -890,3 +890,54 @@ def test_human_closes_abandoned_reservation_at_estimate(setup):
     assert closed["actual_tokens"] == reservation["reserved_tokens"]
     assert_denied(setup, task_id="next", budget=Budget(setup[2], {"usd_per_day": 0.4}),
                   reason="budget_exceeded")
+
+
+@pytest.mark.parametrize("kind", ["row", "jurisdictions", "providers"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_roster_stop_denies_before_reservation(setup, monkeypatch, kind, existing):
+    entry, path, ledger = setup
+    if existing:
+        send(setup)
+    data = {"entries": [entry]}
+    entry["jurisdiction"] = "US"
+    if kind == "row":
+        entry["stopped"] = True
+    else:
+        data["stops"] = {kind: ["us" if kind == "jurisdictions" else entry["provider"]]}
+    path.write_text(json.dumps(data))
+    before = ledger.read_bytes() if existing else None
+    reserve = Mock(side_effect=AssertionError("reservation forbidden"))
+    monkeypatch.setattr(Budget, "_reserve", reserve)
+    with pytest.raises(GateDenied, match="^entry_stopped$"):
+        gate(path, "test", ["https://api.example.test"], [("public", "A")],
+             100, Budget(ledger, {}), 1, 10, 10, "blocked")
+    reserve.assert_not_called()
+    assert (ledger.read_bytes() if ledger.exists() else None) == before
+    for check in (lambda: check_destination(data, "test", ["https://api.example.test"]),
+                  lambda: check_send(data, "test", [("public", "A")], 100)):
+        with pytest.raises(GateDenied, match="^entry_stopped$"):
+            check()
+
+
+@pytest.mark.parametrize("stops", [None, "stop", 1, [],
+    {"jurisdictions": "US"}, {"providers": 1}, {"providers": None},
+    {"jurisdictions": [1]}, {"providers": ["example", 1]},
+])
+def test_invalid_bulk_stops(setup, stops):
+    entry, path, ledger = setup
+    data = {"entries": [entry], "stops": stops}
+    path.write_text(json.dumps(data))
+    for check in (lambda: load_roster(path),
+                  lambda: check_destination(data, "test", ["https://api.example.test"]),
+                  lambda: check_send(data, "test", [("public", "A")], 100),
+                  lambda: gate(path, "test", ["https://api.example.test"],
+                               [("public", "A")], 100, Budget(ledger, {}), 1, 10, 10, "task")):
+        with pytest.raises(GateDenied, match="^invalid_stops$"):
+            check()
+    assert not ledger.exists()
+
+
+def test_stopped_entry_keeps_inactive_precedence(setup):
+    entry = setup[0]
+    entry.update(state="hold", stopped=True)
+    assert_denied(setup, "entry_inactive")

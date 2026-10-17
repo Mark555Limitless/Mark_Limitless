@@ -184,3 +184,44 @@ def test_stop_names_are_normalized(field, value, stop, reason):
     candidates, skipped = roster.candidates_with_skips(data, 'draft')
     assert [entry['id'] for entry in candidates] == ['B']
     assert skipped == [{'id': 'A', 'why': reason}]
+
+
+@pytest.mark.parametrize("kind,reason", [("row", "stopped"),
+    ("jurisdictions", "jurisdiction_stopped"), ("providers", "provider_stopped")])
+def test_active_excludes_stops_and_switch_refuses_them(kind, reason):
+    data = pair()
+    first, second = data["entries"]
+    first.update(jurisdiction="US", provider="google")
+    if kind == "row":
+        first["stopped"] = True
+    else:
+        data["stops"] = {kind: ["us" if kind == "jurisdictions" else "google"]}
+    assert roster.stop_reason(data, first) == reason
+    assert roster.stop_reason(data, second) is None
+    assert roster.active(data, "draft") is second
+    second["state"] = "adopted"
+    assert roster.active(data, "draft") is second  # Filter before ambiguity checks.
+    second["state"] = "trial"
+    second["stopped"] = True
+    with pytest.raises(ValueError, match="^role_unavailable$"):
+        roster.active(data, "draft")
+    with pytest.raises(ValueError, match="^invalid_switch$"):
+        roster.plan_switch(data, "draft", "B")
+    first["state"], second["state"] = "trial", "adopted"
+    second["stopped"] = False
+    before = deepcopy(data)
+    with pytest.raises(ValueError, match="^invalid_switch$"):
+        roster.plan_switch(data, "draft", "A")
+    assert data == before
+
+
+def test_stop_reason_priority():
+    data = pair()
+    first = data["entries"][0]
+    first.update(stopped=True, jurisdiction="US", provider="google")
+    data["stops"] = {"jurisdictions": ["us"], "providers": ["google"]}
+    assert roster.stop_reason(data, first) == "stopped"
+    first["stopped"] = False
+    assert roster.stop_reason(data, first) == "jurisdiction_stopped"
+    data["stops"]["jurisdictions"] = []
+    assert roster.stop_reason(data, first) == "provider_stopped"

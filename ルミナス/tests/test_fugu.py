@@ -440,3 +440,21 @@ def test_unreadable_ledger_stops(setup, monkeypatch):
     monkeypatch.setattr(usage, "today_unknown", lambda v: (_ for _ in ()).throw(OSError()))
     assert fugu.generate("hello", data_class="A").reason == "要照合"
     setup[1].post.assert_not_called()
+
+
+@pytest.mark.parametrize("kind", ["row", "jurisdictions", "providers"])
+def test_roster_stops_block_network(setup, isolated_env, kind):
+    path, client = setup
+    data = json.loads(path.read_text())
+    entry = data["entries"][0]
+    entry["jurisdiction"] = "US"
+    if kind == "row":
+        entry["stopped"] = True
+    else:
+        data["stops"] = {kind: ["us" if kind == "jurisdictions" else entry["provider"]]}
+    path.write_text(json.dumps(data))
+    result = fugu.generate("public", data_class="A")
+    assert (result.rc, result.reason) == (2, "entry_stopped")
+    client.post.assert_not_called()
+    assert not (isolated_env / "data" / "gate_ledger.jsonl").exists()
+    assert read_ledger(isolated_env)[-1]["calls"] == 0

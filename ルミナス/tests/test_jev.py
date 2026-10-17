@@ -192,3 +192,25 @@ def test_roster_calls_per_day_is_enforced_by_gate(gated, monkeypatch, isolated_e
     with pytest.raises(jev.JevUnavailable, match="budget_exceeded"):
         jev.call("public", QS, data_class="A")
     assert len(calls) == 3
+
+
+@pytest.mark.parametrize("kind", ["row", "jurisdictions", "providers"])
+def test_roster_stops_block_network(enabled, monkeypatch, isolated_env, adapter_roster, kind):
+    import json
+    from unittest.mock import Mock
+    data = json.loads(adapter_roster.read_text())
+    entry = next(e for e in data["entries"] if e["id"] == "jev-signal")
+    entry["jurisdiction"] = "US"
+    if kind == "row":
+        entry["stopped"] = True
+    else:
+        data["stops"] = {kind: ["us" if kind == "jurisdictions" else entry["provider"]]}
+    adapter_roster.write_text(json.dumps(data))
+    post = Mock(side_effect=_no_call)
+    monkeypatch.setattr(jev.requests, "post", post)
+    # Jev exposes JevUnavailable, mapping active()'s ValueError to this reason.
+    with pytest.raises(jev.JevUnavailable, match="^roster_selection$"):
+        jev.call("public", QS, data_class="A")
+    post.assert_not_called()
+    assert gate_rows(isolated_env) == []
+    assert read_ledger(isolated_env)[-1]["calls"] == 0
