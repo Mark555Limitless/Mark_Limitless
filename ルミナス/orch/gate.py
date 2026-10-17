@@ -88,6 +88,13 @@ def _entries(roster):
         name = entry["id"]
         if not isinstance(name, str) or not name or name in seen:
             raise GateDenied("invalid_roster_id")
+        for field in ("jurisdiction", "provider"):
+            value = entry.get(field)
+            if value is not None and not isinstance(value, str):
+                raise GateDenied("invalid_stops")
+        stopped = entry.get("stopped")
+        if stopped is not None and type(stopped) is not bool:
+            raise GateDenied("invalid_stops")
         seen.add(name)
     return roster["entries"]
 

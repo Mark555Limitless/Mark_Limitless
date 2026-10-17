@@ -146,9 +146,7 @@ def test_japanese_roles_with_key(adapter_roster, module, key):
 
 
 @pytest.mark.parametrize('value,stopped', [
-    (True, True), ('true', True), (1, True), ('yes', True),
-    (0, True), ('false', True), ('', True), ([], True),
-    (False, False), (None, False),
+    (True, True), (False, False), (None, False),
 ])
 def test_stopped_fails_closed(value, stopped):
     data = pair()
@@ -156,6 +154,19 @@ def test_stopped_fails_closed(value, stopped):
     candidates, skips = roster.candidates_with_skips(data, 'draft')
     assert [e['id'] for e in candidates] == (['B'] if stopped else ['A', 'B'])
     assert skips == ([{'id': 'A', 'why': 'stopped'}] if stopped else [])
+
+
+@pytest.mark.parametrize('field,value', [
+    ('jurisdiction', ['US']), ('provider', ['example']), ('stopped', 'true'),
+    ('stopped', 1),
+])
+def test_invalid_stop_field_types_fail_closed(field, value):
+    data = pair()
+    data['entries'][0][field] = value
+    with pytest.raises(ValueError, match='^invalid_roster$'):
+        roster.stop_reason(data, data['entries'][0])
+    with pytest.raises(ValueError, match='^invalid_roster$'):
+        roster.candidates(data, 'draft')
 
 
 @pytest.mark.parametrize('stops', [None, [], 'stop', 1,
@@ -213,6 +224,27 @@ def test_active_excludes_stops_and_switch_refuses_them(kind, reason):
     with pytest.raises(ValueError, match="^invalid_switch$"):
         roster.plan_switch(data, "draft", "A")
     assert data == before
+
+
+def test_switch_uses_stopped_current_and_rollback_uses_stopped_current():
+    data = pair()
+    data['entries'][0]['stopped'] = True
+    switched = roster.plan_switch(data, 'draft', 'B')
+    assert switched['entries'][1]['state'] == 'adopted'
+
+    data = pair()
+    switched = roster.plan_switch(data, 'draft', 'B')
+    switched['entries'][1]['stopped'] = True
+    reverted = roster.plan_rollback(switched, 'draft')
+    assert reverted['entries'][0]['state'] == 'adopted'
+
+
+def test_rollback_rejects_stopped_previous():
+    data = pair()
+    switched = roster.plan_switch(data, 'draft', 'B')
+    switched['entries'][0]['stopped'] = True
+    with pytest.raises(ValueError, match='^rollback_unavailable$'):
+        roster.plan_rollback(switched, 'draft')
 
 
 def test_stop_reason_priority():

@@ -937,6 +937,26 @@ def test_invalid_bulk_stops(setup, stops):
     assert not ledger.exists()
 
 
+@pytest.mark.parametrize("field,value", [
+    ("jurisdiction", ["US"]), ("provider", ["example"]),
+    ("stopped", "true"), ("stopped", 1),
+])
+def test_invalid_stop_field_types(setup, field, value):
+    entry, path, ledger = setup
+    entry[field] = value
+    path.write_text(json.dumps({"entries": [entry]}))
+    data = {"entries": [entry]}
+    for check in (lambda: load_roster(path),
+                  lambda: check_destination(data, "test", ["https://api.example.test"]),
+                  lambda: check_send(data, "test", [("public", "A")], 100),
+                  lambda: gate(path, "test", ["https://api.example.test"],
+                               [("public", "A")], 100, Budget(ledger, {}),
+                               1, 10, 10, "task")):
+        with pytest.raises(GateDenied, match="^invalid_stops$"):
+            check()
+    assert not ledger.exists()
+
+
 def test_stopped_entry_keeps_inactive_precedence(setup):
     entry = setup[0]
     entry.update(state="hold", stopped=True)

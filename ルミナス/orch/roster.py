@@ -49,11 +49,20 @@ def _stops(roster) -> dict:
 def stop_reason(roster, entry) -> Optional[str]:
     """Return the first stop reason, validating all bulk stops fail-closed."""
     stops = _stops(roster)
-    if entry.get("stopped") is not False and entry.get("stopped") is not None:
+    if not isinstance(entry, dict):
+        raise ValueError("invalid_roster")
+    for field in ("jurisdiction", "provider"):
+        value = entry.get(field)
+        if value is not None and not isinstance(value, str):
+            raise ValueError("invalid_roster")
+    stopped = entry.get("stopped")
+    if stopped is not None and type(stopped) is not bool:
+        raise ValueError("invalid_roster")
+    if stopped is True:
         return "stopped"
-    if str(entry.get("jurisdiction", "")).strip().casefold() in stops["jurisdictions"]:
+    if (entry.get("jurisdiction") or "").strip().casefold() in stops["jurisdictions"]:
         return "jurisdiction_stopped"
-    if str(entry.get("provider", "")).strip().casefold() in stops["providers"]:
+    if (entry.get("provider") or "").strip().casefold() in stops["providers"]:
         return "provider_stopped"
     return None
 
@@ -90,13 +99,25 @@ def active(roster, role) -> dict:
     raise ValueError("role_unavailable")
 
 
+def _current(roster, role) -> dict:
+    """Select the adopted/trial row without applying stop controls."""
+    entries = [entry for entry in _entries(roster) if _matches_role(entry, role)]
+    for state in ("adopted", "trial"):
+        matches = [entry for entry in entries if entry.get("state") == state]
+        if len(matches) > 1:
+            raise ValueError("ambiguous_role")
+        if matches:
+            return matches[0]
+    raise ValueError("role_unavailable")
+
+
 def plan_switch(roster, role, new_id) -> dict:
     plan = deepcopy(roster)
     new = next((entry for entry in _entries(plan) if entry["id"] == new_id), None)
     if (new is None or not _matches_role(new, role)
             or new.get("state") != "trial" or stop_reason(plan, new) is not None):
         raise ValueError("invalid_switch")
-    old = active(plan, role)
+    old = _current(plan, role)
     if new is old:
         raise ValueError("invalid_switch")
     history = plan.setdefault("switch_history", [])
@@ -109,7 +130,7 @@ def plan_switch(roster, role, new_id) -> dict:
 
 def plan_rollback(roster, role) -> dict:
     plan = deepcopy(roster)
-    current = active(plan, role)
+    current = _current(plan, role)
     history = plan.get("switch_history", [])
     if not isinstance(history, list) or any(not isinstance(row, dict) for row in history):
         raise ValueError("invalid_switch_history")
@@ -121,7 +142,8 @@ def plan_rollback(roster, role) -> dict:
     previous = next((entry for entry in _entries(plan) if entry["id"] == last.get("from")), None)
     if (last.get("to") != current["id"] or previous is None
             or not _matches_role(previous, role) or previous.get("state") != "hold"
-            or current.get("state") != "adopted"):
+            or current.get("state") != "adopted"
+            or stop_reason(plan, previous) is not None):
         raise ValueError("rollback_unavailable")
     current["state"], previous["state"] = "trial", "adopted"
     del history[index]

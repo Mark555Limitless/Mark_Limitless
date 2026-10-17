@@ -3,6 +3,11 @@
 > 各セッションの終わりに、この下に新しい節を足す（Stop hook が未更新なら終了を止める）。
 > 書くこと: 状態・やったこと・決定・未解決・次の一手。Mark の指示と決定は処理した時点で書く。鍵・ローカルの絶対パスは書かない。
 
+## 2026-10-17 夕 停止条件をすべての送信経路で（司令塔: Claude Fable 5.1）
+- 状態: コミット済み。停止条件（`stopped`・`stops`）がゲート `gate._entry` と `roster.active()` でも効く（fail-closed）。Opus 審査 APPROVE。pytest 1223 passed・hooks 247 passed
+- 未解決: (1) 名簿に `role_key`・`jurisdiction`（Mark の承認待ち。案は 2026-10-17 午後の節） (2) `docs/specs/20261017_classify_followups.md`（偽陽性 4 件＋セキュリティ審査の 3 件。急がない） (3) ROUTINE §2 に「壁打ちの往復中は回答と記録だけ」（Mark の確認つき） (4) Fugu の実請求との照合（Mark） (5) 審査の軽い指摘: `_entries` でも型を検査・切替の試験に switch_history の assert
+- 次の一手: (1) → 受入条件 1「模擬の 10 件が 10 件とも C」の実地確認（`python3 -m orch.router run` で区分 A の実呼び出し 1 回も含む）→ (2)
+
 ## 2026-10-17 午後 振り分け役 v0 の 1 週目が審査に合格（司令塔: Claude Fable 5.1）
 - 状態: `orch/classify.py`・`orch/router.py`・`orch/roster.py` と試験をコミット済み。Opus 審査 APPROVE（4 回目）。pytest 1188 passed・hooks 247 passed。CLI: `python3 -m orch.router run --role drafter --origin public < prompt.txt`／`python3 -m orch.router check`
 - 決定: 投稿 URL の ID は X／Twitter のホストだけ除外（任意のホストの `/status/` では除外しない）。司令塔の直接修正 2 件（`_URL_HEAD` のユーザー情報・投稿 ID のホスト限定）は CLAUDE.md の例外（小さな修正）として記録
