@@ -5,7 +5,7 @@
 
 ## 2026-10-17 夕 停止条件をすべての送信経路で（司令塔: Claude Fable 5.1）
 - 状態: コミット済み。停止条件（`stopped`・`stops`）がゲート `gate._entry` と `roster.active()` でも効く（fail-closed）。Opus 審査 APPROVE。pytest 1223 passed・hooks 247 passed
-- 未解決: (1) 名簿に `role_key`・`jurisdiction`（Mark の承認待ち。案は 2026-10-17 午後の節） (2) `docs/specs/20261017_classify_followups.md`（偽陽性 4 件＋セキュリティ審査の 3 件。急がない） (3) ROUTINE §2 に「壁打ちの往復中は回答と記録だけ」（Mark の確認つき） (4) Fugu の実請求との照合（Mark） (5) 審査の軽い指摘: `_entries` でも型を検査・切替の試験に switch_history の assert
+- 未解決: (1) 名簿に `role_key`・`jurisdiction`（Mark の承認待ち。案は 2026-10-17 午後の節） (2) `docs/specs/20261017_classify_followups.md`（偽陽性 4 件＋セキュリティ審査の 3 件。急がない） (3) ROUTINE §2 に「壁打ちの往復中は回答と記録だけ」（Mark の確認つき） (4) Fugu の実請求との照合＝**済み**（Mark の報告 10/15 $0.1＝台帳 $0.10053。ADR `20261015-sakana-fugu.md` 追記） (5) 審査の軽い指摘: `_entries` でも型を検査・切替の試験に switch_history の assert
 - 次の一手: (1) → 受入条件 1「模擬の 10 件が 10 件とも C」の実地確認（`python3 -m orch.router run` で区分 A の実呼び出し 1 回も含む）→ (2)
 
 ## 2026-10-17 午後 振り分け役 v0 の 1 週目が審査に合格（司令塔: Claude Fable 5.1）
